@@ -338,6 +338,360 @@ select.fsi{cursor:pointer}textarea.fsi{resize:vertical;min-height:68px}
   select.fsi{font-size:16px!important} /* prevent iOS zoom */
   input.fsi,textarea.fsi{font-size:16px!important} /* prevent iOS zoom */
 }
+
+/* ════════════════════════════════════════════════════════════════════════
+   [Session #7 Phase B + C] MOBILE-FIRST POLISH
+   Fixes the issues from user UAT on iPhone:
+     ❌ no bottom nav visible (old CSS targeted .sb-item which doesn't exist
+        — real class is .ni)
+     ❌ modal footer buttons unreachable (modal too tall on mobile)
+     ❌ wizard sidebar 220px wide eats half the screen on mobile
+     ❌ no native-app feel — flat clicks, no transitions
+   ════════════════════════════════════════════════════════════════════════ */
+
+/* ── Safe-area insets for iPhone notch / Dynamic Island ──────────────── */
+:root{
+  --safe-top: env(safe-area-inset-top, 0px);
+  --safe-bottom: env(safe-area-inset-bottom, 0px);
+  --safe-left: env(safe-area-inset-left, 0px);
+  --safe-right: env(safe-area-inset-right, 0px);
+  --bn-height: 64px;  /* bottom nav height */
+}
+
+/* ── Smooth motion baseline (respects prefers-reduced-motion) ────────── */
+@media (prefers-reduced-motion: no-preference){
+  .ni, .btn, .sc, .room-card, .fsi, .modal, .toast, .bdg, .ss-it {
+    transition: transform .15s ease, background .18s ease, border-color .18s ease, box-shadow .18s ease, opacity .18s ease;
+  }
+  .btn:active{ transform: scale(.96); }
+  .sc:active, .room-card:active{ transform: scale(.98); }
+  .ni:active{ transform: scale(.94); }
+}
+
+/* ── Phase C polish: applies on all sizes ────────────────────────────── */
+html{ scroll-behavior: smooth; }
+body{ -webkit-font-smoothing: antialiased; }
+.modal{ -webkit-overflow-scrolling: touch; overscroll-behavior: contain; }
+button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transparent; }
+
+/* ════════════════════════════════════════════════════════════════════════
+   MOBILE — under 768px (the override block)
+   ════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 768px){
+
+  /* ── Layout: stack vertically + reserve bottom-nav space ─────────────── */
+  body{ overflow-x: hidden; }
+  .app{ flex-direction: column !important; height: auto !important; min-height: 100vh; }
+  .main{ width: 100% !important; padding-bottom: calc(var(--bn-height) + var(--safe-bottom)) !important; }
+  .content{ padding: 14px !important; }
+
+  /* ── Sidebar → fixed bottom nav with REAL .ni items ──────────────────── */
+  .sb{
+    position: fixed !important;
+    bottom: 0 !important; left: 0 !important; right: 0 !important;
+    width: 100% !important;
+    height: calc(var(--bn-height) + var(--safe-bottom)) !important;
+    flex-direction: row !important;
+    background: #0b2d52 !important;
+    border-top: 1px solid rgba(255,255,255,.12);
+    box-shadow: 0 -4px 18px rgba(0,0,0,.18);
+    z-index: 200 !important;
+    overflow: hidden !important;
+    padding-bottom: var(--safe-bottom);
+  }
+  .sb-hdr, .sb-ft{ display: none !important; }
+  .sb-nav{
+    flex: 1 !important;
+    display: flex !important;
+    flex-direction: row !important;
+    align-items: stretch !important;
+    overflow-x: auto !important;
+    overflow-y: hidden !important;
+    padding: 6px 4px !important;
+    scroll-snap-type: x proximity;
+    scrollbar-width: none;
+  }
+  .sb-nav::-webkit-scrollbar{ display: none; }
+  .ni{
+    flex-direction: column !important;
+    justify-content: center !important;
+    gap: 2px !important;
+    min-width: 64px !important;
+    padding: 6px 8px !important;
+    border-left: none !important;
+    border-right: none !important;
+    border-radius: 10px !important;
+    font-size: 9.5px !important;
+    line-height: 1.15 !important;
+    text-align: center;
+    scroll-snap-align: start;
+  }
+  .ni.active{
+    border-left: none !important; border-right: none !important;
+    background: rgba(255,255,255,.16) !important;
+  }
+  .ni-ico{ font-size: 20px !important; width: auto !important; margin: 0 !important; }
+  .ni-en, .ni-ar{
+    display: block !important;
+    font-size: 9.5px !important;
+    max-width: 64px;
+    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  }
+
+  /* ── Top bar: tighter on mobile ──────────────────────────────────────── */
+  .topbar{ padding: 0 12px !important; height: 52px !important; }
+  .tb-t{ font-size: 14px !important; }
+  .tb-t span{ display: none !important; }   /* hide Arabic subtitle in narrow bar */
+  .tb-pill{ padding: 4px 8px !important; font-size: 11px !important; }
+  .tb-acts{ flex-shrink: 0; }
+  .tb-acts .btn{ padding: 6px 10px !important; font-size: 12px !important; }
+
+  /* ── Stats cards: 2-up instead of 5 ──────────────────────────────────── */
+  .stats5{ grid-template-columns: repeat(2, 1fr) !important; gap: 8px !important; margin-bottom: 12px !important; }
+  .sc{ padding: 11px 12px !important; }
+  .sc-v{ font-size: 20px !important; }
+
+  /* ── Cards & dashboards ──────────────────────────────────────────────── */
+  .card{ padding: 12px !important; border-radius: 10px !important; }
+  .ch{ flex-wrap: wrap; gap: 8px; }
+  .dg{ grid-template-columns: 1fr !important; gap: 10px !important; }
+  .room-grid{ grid-template-columns: repeat(2, 1fr) !important; gap: 8px !important; }
+
+  /* ── Tables: horizontal scroll with sticky first column ─────────────── */
+  .tw{ overflow-x: auto !important; -webkit-overflow-scrolling: touch; }
+  .tw table{ min-width: 640px; font-size: 12px; }
+  .tw th, .tw td{ padding: 7px 9px !important; }
+
+  /* ── Forms: collapse 2-col / 3-col grids to 1-col ─────────────────────
+     The app uses inline `style="display:grid;grid-template-columns:..."`.
+     We can't override inline grid template, but we CAN flip the container
+     to flex-wrap so children stack naturally on narrow screens.        */
+  [style*="grid-template-columns:1fr 1fr"],
+  [style*="grid-template-columns: 1fr 1fr"],
+  [style*="grid-template-columns:2fr 1fr"],
+  [style*="grid-template-columns: 2fr 1fr"],
+  [style*="grid-template-columns:1fr 2fr"],
+  [style*="grid-template-columns: 1fr 2fr"],
+  [style*="grid-template-columns:1fr 1fr 1fr"],
+  [style*="grid-template-columns: 1fr 1fr 1fr"],
+  [style*="grid-template-columns:1fr 1fr 1fr 1fr"],
+  [style*="grid-template-columns: 1fr 1fr 1fr 1fr"],
+  [style*="grid-template-columns:repeat(3"],
+  [style*="grid-template-columns:repeat(4"],
+  [style*="grid-template-columns:repeat(5"],
+  [style*="grid-template-columns:repeat(auto-fit"]{
+    grid-template-columns: 1fr !important;
+  }
+  .frow, .frow3{ grid-template-columns: 1fr !important; }
+  .fsi{ font-size: 16px !important; padding: 10px 12px !important; }
+  .fsl{ font-size: 12px !important; }
+
+  /* ── Modal: full-screen sheet with sticky bottom buttons ──────────────
+     `.mbd.open` uses `display: block` (not flex) so the absolute-positioned
+     `.modal` child sits exactly at the viewport edges. The flex layout for
+     header / scrollable body / footer happens INSIDE `.modal`.            */
+  .mbd{ padding: 0 !important; }
+  .mbd.open{ display: block !important; }
+  .modal{
+    position: absolute !important;
+    top: 0 !important; left: 0 !important; right: 0 !important; bottom: 0 !important;
+    max-width: 100% !important;
+    width: 100% !important;
+    height: 100% !important;
+    max-height: 100% !important;
+    min-height: 0 !important;
+    border-radius: 0 !important;
+    margin: 0 !important;
+    display: flex !important;
+    flex-direction: column !important;
+    overflow: hidden !important;
+  }
+  .mhdr{
+    padding: 12px 14px !important;
+    flex-shrink: 0 !important;
+    padding-top: calc(12px + var(--safe-top)) !important;
+  }
+  .mt{ font-size: 14px !important; }
+  .mbody{
+    flex: 1 1 auto !important;
+    max-height: none !important;
+    overflow-y: auto !important;
+    padding: 14px !important;
+    -webkit-overflow-scrolling: touch;
+  }
+  .mftr{
+    padding: 10px 14px calc(10px + var(--safe-bottom)) !important;
+    flex-shrink: 0 !important;
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+    background: #fff !important;
+    border-top: 1px solid var(--g200);
+    box-shadow: 0 -2px 12px rgba(0,0,0,.06);
+  }
+  .mftr .btn{ flex: 1 1 auto; min-width: 0; font-size: 13px; }
+  /* Disable the inherited `sU` animation (translateY 14px → 0) — on mobile it
+     leaves a residual transform on iOS Safari that pushes the footer 14px
+     past the viewport. Use a clean opacity-only fade instead. */
+  .modal{ animation: none !important; transform: none !important; }
+  @media (prefers-reduced-motion: no-preference){
+    .modal{ animation: mFadeIn .22s ease !important; }
+  }
+  @keyframes mFadeIn{ from{opacity:0} to{opacity:1} }
+
+  /* ── Case modal (caseModal) — tabs, footer, content ──────────────────── */
+  /* Flex layout already pins .mftr to the bottom of .modal (flex-shrink:0
+     in a column flex parent). Don't add `position:sticky` — it conflicts
+     with the parent's `overflow:hidden` and pushes the footer past the
+     viewport on iOS Safari. */
+  #caseModal .modal{ max-width: 100% !important; }
+  #cmBody{ padding: 12px !important; flex: 1 1 auto !important; overflow-y: auto !important; }
+  #caseModalFtr{
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+    padding: 10px 14px calc(10px + var(--safe-bottom)) !important;
+    background: #fff;
+    border-top: 1px solid var(--g200);
+    box-shadow: 0 -2px 12px rgba(0,0,0,.06);
+    flex-shrink: 0 !important;
+  }
+  #caseModalFtr .btn{ flex: 1 1 calc(50% - 4px); min-width: 0; }
+  #caseModalFtr > .btn:first-child{ flex: 1 1 100%; order: 99; }   /* Cancel goes to bottom row */
+
+  /* ── Wizard (Medical Report) — sidebar moves to top horizontal pills ──
+     The wizard renders inline-styled `width:220px` sidebar — override. */
+  .wiz-container{
+    flex-direction: column !important;
+    min-height: auto !important;
+    max-height: none !important;
+  }
+  .wiz-sidebar{
+    width: 100% !important;
+    flex: 0 0 auto !important;
+    max-height: none !important;
+    border-right: none !important;
+    border-bottom: 1px solid #e2e8f0 !important;
+    padding: 8px !important;
+    background: #f8fafc !important;
+    display: flex !important;
+    overflow-x: auto !important;
+    -webkit-overflow-scrolling: touch;
+    gap: 6px !important;
+    scrollbar-width: none;
+  }
+  .wiz-sidebar::-webkit-scrollbar{ display: none; }
+  .wiz-sidebar > div:first-child{ display: none !important; }   /* "WIZARD STEPS" label */
+  .wiz-sidebar > div + div{ display: none !important; }         /* legend */
+  .wiz-step-item{
+    flex: 0 0 auto !important;
+    flex-direction: column !important;
+    align-items: center !important;
+    text-align: center !important;
+    min-width: 76px !important;
+    padding: 6px 8px !important;
+    border-left: none !important;
+    border-bottom: 3px solid transparent !important;
+    border-radius: 8px 8px 0 0 !important;
+    font-size: 11px !important;
+    background: #fff !important;
+    gap: 2px !important;
+  }
+  .wiz-step-item[style*="2563eb"]{
+    border-left-color: transparent !important;
+    border-bottom-color: #2563eb !important;
+    background: #eff6ff !important;
+  }
+  .wiz-main{
+    max-height: none !important;
+    width: 100% !important;
+    padding: 14px !important;
+  }
+  .wiz-section{ padding: 10px !important; }
+  /* Wizard step picker hint at top of mobile sidebar */
+  .wiz-sidebar::before{
+    content: '⬅ swipe ➡';
+    position: sticky; left: 0;
+    align-self: center;
+    flex: 0 0 auto;
+    font-size: 9px; color: #94a3b8; padding: 4px 6px;
+    background: rgba(255,255,255,.9);
+  }
+
+  /* ── Insurance Workspace modal — full sheet ──────────────────────────── */
+  #insWorkspaceModal .modal-content,
+  #bankFormModal .modal-content,
+  #insReportsModal .modal-content{
+    max-width: 100% !important;
+    width: 100% !important;
+    height: 100vh !important;
+    max-height: 100vh !important;
+    border-radius: 0 !important;
+    overflow-y: auto !important;
+  }
+
+  /* ── Invoice builder — readable line items + reachable actions ───────── */
+  #invModal .mbody{ padding: 12px !important; flex: 1 1 auto !important; overflow-y: auto !important; }
+  .pr{ flex-wrap: wrap !important; gap: 6px !important; padding: 8px !important; }
+  .pr select, .pr input{ flex: 1 1 calc(50% - 4px) !important; min-width: 0 !important; }
+  /* Footer stays at the bottom via flex-shrink:0 (flex column layout) */
+  #invModal .mftr{
+    flex-wrap: wrap !important;
+    gap: 6px !important;
+    flex-shrink: 0 !important;
+    padding-bottom: calc(10px + var(--safe-bottom)) !important;
+  }
+  #invModal .mftr .btn{ flex: 1 1 calc(50% - 4px); }
+
+  /* ── Sub-modals (Banks form, IC form, etc.) ──────────────────────────── */
+  .modal-content{
+    max-width: 100% !important;
+    width: 100% !important;
+    border-radius: 0 !important;
+    height: 100vh !important;
+    max-height: 100vh !important;
+    overflow-y: auto !important;
+  }
+
+  /* ── Login screen ────────────────────────────────────────────────────── */
+  #loginPage{ padding: 16px !important; padding-top: max(16px, var(--safe-top)) !important; }
+  .ll{ display: none !important; }
+  .lr{ width: 100% !important; }
+  .lcard{ padding: 24px 18px !important; width: 100% !important; max-width: 420px !important; }
+
+  /* ── PWA Update banner — sit above the bottom nav ────────────────────── */
+  #hmcUpdateBanner{
+    bottom: calc(var(--bn-height) + var(--safe-bottom) + 12px) !important;
+    left: 12px !important; right: 12px !important;
+    transform: none !important;
+    max-width: none !important;
+    flex-wrap: wrap !important;
+  }
+
+  /* ── Toast — above bottom nav ────────────────────────────────────────── */
+  .tc{ bottom: calc(var(--bn-height) + var(--safe-bottom) + 14px) !important; right: 12px !important; left: 12px; }
+  .toast{ max-width: none !important; }
+
+  /* ── Search bar / filters: stack ─────────────────────────────────────── */
+  .sbar{ flex-wrap: wrap !important; gap: 6px !important; }
+  .sbar .siw{ flex: 1 1 100%; }
+  .sbar .fsi{ flex: 1 1 calc(50% - 3px) !important; min-width: 0 !important; }
+
+  /* ── Chips, badges: tap target ────────────────────────────────────────── */
+  .btn-ic{ width: 34px !important; height: 34px !important; }
+  .btn-sm{ min-height: 32px; }
+
+  /* ── Reduce horizontal padding on cramped screens ────────────────────── */
+  body, .modal, .card, #cmBody{ font-size: 13px; }
+}
+
+/* ── Even smaller (iPhone SE etc.) ─────────────────────────────────────── */
+@media (max-width: 380px){
+  .ni{ min-width: 56px !important; padding: 6px 5px !important; }
+  .ni-ico{ font-size: 18px !important; }
+  .stats5{ grid-template-columns: 1fr 1fr !important; }
+  .room-grid{ grid-template-columns: 1fr !important; }
+  .topbar{ padding: 0 8px !important; }
+  .content{ padding: 10px !important; }
+}
 </style>
 </head>
 <body>
