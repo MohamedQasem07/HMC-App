@@ -358,18 +358,19 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
     scrollbar-width: none;
   }
   .sb-nav::-webkit-scrollbar{ display: none; }
+  /* [Phase 2] Bottom-nav item: wider so labels like "Ins. Companies" + "Users
+     & Access" show without truncation, and the entire row scrolls cleanly. */
   .ni{
     flex-direction: column !important;
     justify-content: center !important;
     align-items: center !important;
-    gap: 1px !important;
-    min-width: 62px !important;
+    gap: 2px !important;
+    min-width: 68px !important;
     height: 60px !important;
     padding: 6px 6px !important;
     border-left: none !important;
     border-right: none !important;
     border-radius: 10px !important;
-    font-size: 9.5px !important;
     line-height: 1.1 !important;
     text-align: center;
     scroll-snap-align: start;
@@ -379,13 +380,28 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
     border-left: none !important; border-right: none !important;
     background: rgba(255,255,255,.16) !important;
   }
-  .ni-ico{ font-size: 19px !important; width: auto !important; margin: 0 !important; line-height: 1 !important; }
+  /* [Phase 2] Unified icon size — 19px across every nav item */
+  .ni-ico{
+    font-size: 19px !important;
+    line-height: 1 !important;
+    width: auto !important;
+    margin: 0 !important;
+    flex-shrink: 0 !important;
+  }
+  /* [Phase 2] Allow labels to wrap to 2 lines (instead of being clipped with
+     "..."). "Ins. Companies" → "Ins.\nCompanies" — both visible.            */
   .ni-en, .ni-ar{
-    display: block !important;
+    display: -webkit-box !important;
+    -webkit-box-orient: vertical;
+    -webkit-line-clamp: 2;
+    line-clamp: 2;
     font-size: 9px !important;
-    max-width: 60px;
-    overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
     line-height: 1.1 !important;
+    max-width: 64px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: normal !important;
+    word-break: break-word;
   }
   body.ar .ni-en{ display: none !important; }
   body:not(.ar) .ni-ar{ display: none !important; }
@@ -552,21 +568,26 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
      Order: File · Save Draft · Back · Next/Save&Close · Cancel (cancel last). */
   #caseModal .modal{ max-width: 100% !important; }
   #cmBody{ padding: 12px !important; flex: 1 1 auto !important; overflow-y: auto !important; }
-  /* Compact footer — single row of 4 buttons, each minimal width.
-     `auto-fit, minmax(72px, 1fr)` lets short buttons (Save, Next) stay snug
-     and wrap only if a longer button is in the row. */
+  /* [Phase 2] Footer grid uses minmax(140px, 1fr) — at 375px this resolves to
+     2 columns of ~174px each, so the longest label "💾 Save Draft" displays
+     in full. At 430px it can fit 2 cols of ~205px. Wide enough that the text
+     never clips, narrow enough that buttons aren't oversized. */
   #caseModalFtr{
     display: grid !important;
-    grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)) !important;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)) !important;
     gap: 6px !important;
     padding: 8px 10px calc(8px + var(--safe-bottom)) !important;
     flex-shrink: 0 !important;
   }
+  /* [Phase 2] Restore comfortable font size now that buttons get ~174px
+     each (instead of 84px). All footer buttons line up uniformly. */
   #caseModalFtr .btn{
     width: auto !important;
     min-width: 0 !important;
     flex: none !important;
     margin: 0 !important;
+    font-size: 13px !important;
+    padding: 0 12px !important;
     white-space: nowrap;
     overflow: hidden;
     text-overflow: ellipsis;
@@ -603,19 +624,38 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
      Previous selector `div + div` was a bug — it matched every adjacent
      sibling, hiding all step items too. The right pattern is `:not(.wiz-step-item)`. */
   .wiz-sidebar > div:not(.wiz-step-item){ display: none !important; }
+  /* [Phase 2] Wider step pill (was 76 → 110) so longer English step labels
+     ("Examination", "Treatment Plan", "Procedures") fit on one line below
+     the Arabic line. Both labels now readable. */
   .wiz-step-item{
     flex: 0 0 auto !important;
     flex-direction: column !important;
     align-items: center !important;
     text-align: center !important;
-    min-width: 76px !important;
+    min-width: 110px !important;
     padding: 6px 8px !important;
     border-left: none !important;
     border-bottom: 3px solid transparent !important;
     border-radius: 8px 8px 0 0 !important;
-    font-size: 11px !important;
     background: #fff !important;
     gap: 2px !important;
+  }
+  /* Status dot (first child of step item) — smaller on mobile to save space */
+  .wiz-step-item > div:first-child{
+    width: 6px !important; height: 6px !important; flex: 0 0 6px !important;
+    margin: 0 auto;
+  }
+  /* Inner label group: Arabic line + English line — both visible */
+  .wiz-step-item > div:nth-child(2) > div:first-child{
+    font-size: 12px !important;       /* AR / emoji line */
+    line-height: 1.15 !important;
+    white-space: nowrap;
+  }
+  .wiz-step-item > div:nth-child(2) > div:nth-child(2){
+    font-size: 10px !important;       /* EN line — readable */
+    line-height: 1.1 !important;
+    white-space: nowrap;
+    color: #64748b;
   }
   .wiz-step-item[style*="2563eb"]{
     border-left-color: transparent !important;
@@ -667,9 +707,11 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
   /* ── Wizard / Medical Report footer — compact toolbar ─────────────────
      Step indicator gets its own slim row above the action buttons.
      Buttons size by content (auto-fit minmax) so they don't look hollow. */
+  /* [Phase 2] Same minmax(140) treatment as caseModalFtr — keeps "💾 Save",
+     "🖨️ Print", "← Prev" etc. fully visible without clipping. */
   #rptModalFtr{
     display: grid !important;
-    grid-template-columns: repeat(auto-fit, minmax(72px, 1fr)) !important;
+    grid-template-columns: repeat(auto-fit, minmax(140px, 1fr)) !important;
     gap: 6px !important;
     padding: 8px 10px calc(8px + var(--safe-bottom)) !important;
     flex-shrink: 0 !important;
