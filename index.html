@@ -386,6 +386,10 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
   .content{ padding: 14px !important; }
 
   /* ── Sidebar → fixed bottom nav with REAL .ni items ──────────────────── */
+  /* Total height = 72px content + safe-area inset (home indicator on iPhone).
+     Increased from 64 → 72 so two-line labels (Arabic + English) fit without
+     getting clipped at the bottom of the screen. */
+  :root{ --bn-height: 72px; }
   .sb{
     position: fixed !important;
     bottom: 0 !important; left: 0 !important; right: 0 !important;
@@ -404,10 +408,10 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
     flex: 1 !important;
     display: flex !important;
     flex-direction: row !important;
-    align-items: stretch !important;
+    align-items: center !important;
     overflow-x: auto !important;
     overflow-y: hidden !important;
-    padding: 6px 4px !important;
+    padding: 4px 4px !important;
     scroll-snap-type: x proximity;
     scrollbar-width: none;
   }
@@ -415,28 +419,34 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
   .ni{
     flex-direction: column !important;
     justify-content: center !important;
-    gap: 2px !important;
-    min-width: 64px !important;
-    padding: 6px 8px !important;
+    align-items: center !important;
+    gap: 1px !important;
+    min-width: 62px !important;
+    height: 60px !important;
+    padding: 6px 6px !important;
     border-left: none !important;
     border-right: none !important;
     border-radius: 10px !important;
     font-size: 9.5px !important;
-    line-height: 1.15 !important;
+    line-height: 1.1 !important;
     text-align: center;
     scroll-snap-align: start;
+    flex-shrink: 0;
   }
   .ni.active{
     border-left: none !important; border-right: none !important;
     background: rgba(255,255,255,.16) !important;
   }
-  .ni-ico{ font-size: 20px !important; width: auto !important; margin: 0 !important; }
+  .ni-ico{ font-size: 19px !important; width: auto !important; margin: 0 !important; line-height: 1 !important; }
   .ni-en, .ni-ar{
     display: block !important;
-    font-size: 9.5px !important;
-    max-width: 64px;
+    font-size: 9px !important;
+    max-width: 60px;
     overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+    line-height: 1.1 !important;
   }
+  body.ar .ni-en{ display: none !important; }
+  body:not(.ar) .ni-ar{ display: none !important; }
 
   /* ── Top bar: tighter on mobile ──────────────────────────────────────── */
   .topbar{ padding: 0 12px !important; height: 52px !important; }
@@ -483,8 +493,24 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
     grid-template-columns: 1fr !important;
   }
   .frow, .frow3{ grid-template-columns: 1fr !important; }
-  .fsi{ font-size: 16px !important; padding: 10px 12px !important; }
+  /* CRITICAL: box-sizing fix so inputs respect their container's width.
+     Without this, padding adds to width=100% and the input overflows. */
+  .fsi, input.fsi, select.fsi, textarea.fsi, .ss-i{
+    font-size: 16px !important;
+    padding: 10px 12px !important;
+    box-sizing: border-box !important;
+    max-width: 100% !important;
+    width: 100% !important;
+  }
+  .fsg{ min-width: 0 !important; max-width: 100% !important; }
   .fsl{ font-size: 12px !important; }
+  /* Containers that hold form rows — ensure they don't overflow */
+  .mbody, .mbody > div, .modal > div{
+    max-width: 100% !important;
+    box-sizing: border-box !important;
+  }
+  /* Prevent any inline-styled section from blowing past viewport */
+  .modal *[style*="padding"]{ box-sizing: border-box; }
 
   /* ── Modal: full-screen sheet with sticky bottom buttons ──────────────
      `.mbd.open` uses `display: block` (not flex) so the absolute-positioned
@@ -539,23 +565,42 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
   @keyframes mFadeIn{ from{opacity:0} to{opacity:1} }
 
   /* ── Case modal (caseModal) — tabs, footer, content ──────────────────── */
-  /* Flex layout already pins .mftr to the bottom of .modal (flex-shrink:0
-     in a column flex parent). Don't add `position:sticky` — it conflicts
-     with the parent's `overflow:hidden` and pushes the footer past the
-     viewport on iOS Safari. */
+  /* Footer layout: 2 buttons per row, all same height + min-width.
+     Order: File · Save Draft · Back · Next/Save&Close · Cancel (cancel last). */
   #caseModal .modal{ max-width: 100% !important; }
   #cmBody{ padding: 12px !important; flex: 1 1 auto !important; overflow-y: auto !important; }
   #caseModalFtr{
-    flex-wrap: wrap !important;
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
     gap: 6px !important;
-    padding: 10px 14px calc(10px + var(--safe-bottom)) !important;
+    padding: 10px 12px calc(10px + var(--safe-bottom)) !important;
     background: #fff;
     border-top: 1px solid var(--g200);
     box-shadow: 0 -2px 12px rgba(0,0,0,.06);
     flex-shrink: 0 !important;
   }
-  #caseModalFtr .btn{ flex: 1 1 calc(50% - 4px); min-width: 0; }
-  #caseModalFtr > .btn:first-child{ flex: 1 1 100%; order: 99; }   /* Cancel goes to bottom row */
+  #caseModalFtr .btn{
+    width: 100% !important;
+    min-width: 0 !important;
+    flex: none !important;
+    margin: 0 !important;
+    padding: 10px 6px !important;
+    font-size: 13px !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  /* Override the earlier "Cancel goes full width" rule — keep grid columns */
+  #caseModalFtr > .btn:first-child{ flex: none !important; order: 0 !important; }
+  /* Inner flex wrapper inside the footer (Back/Next group) — break out of grid */
+  #caseModalFtr > div{
+    grid-column: 1 / -1 !important;
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 6px !important;
+    margin: 0 !important;
+  }
+  #caseModalFtr > div .btn{ width: 100% !important; }
 
   /* ── Wizard (Medical Report) — sidebar moves to top horizontal pills ──
      The wizard renders inline-styled `width:220px` sidebar — override. */
@@ -579,8 +624,10 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
     scrollbar-width: none;
   }
   .wiz-sidebar::-webkit-scrollbar{ display: none; }
-  .wiz-sidebar > div:first-child{ display: none !important; }   /* "WIZARD STEPS" label */
-  .wiz-sidebar > div + div{ display: none !important; }         /* legend */
+  /* Hide ONLY the non-step divs (the "WIZARD STEPS" label + the bottom legend).
+     Previous selector `div + div` was a bug — it matched every adjacent
+     sibling, hiding all step items too. The right pattern is `:not(.wiz-step-item)`. */
+  .wiz-sidebar > div:not(.wiz-step-item){ display: none !important; }
   .wiz-step-item{
     flex: 0 0 auto !important;
     flex-direction: column !important;
@@ -634,12 +681,45 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
   .pr select, .pr input{ flex: 1 1 calc(50% - 4px) !important; min-width: 0 !important; }
   /* Footer stays at the bottom via flex-shrink:0 (flex column layout) */
   #invModal .mftr{
-    flex-wrap: wrap !important;
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
     gap: 6px !important;
     flex-shrink: 0 !important;
     padding-bottom: calc(10px + var(--safe-bottom)) !important;
   }
-  #invModal .mftr .btn{ flex: 1 1 calc(50% - 4px); }
+  #invModal .mftr .btn{ width: 100% !important; flex: none !important; padding: 10px 6px !important; font-size: 13px !important; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+
+  /* ── Wizard / Medical Report footer ──────────────────────────────────── */
+  /* Layout: 1) full-width step indicator, 2) Cancel + Prev/Next on a row,
+     3) Save + Print on the next row. Forces consistent button sizing so
+     "Save Draft" doesn't get clipped. */
+  #rptModalFtr{
+    display: grid !important;
+    grid-template-columns: 1fr 1fr !important;
+    gap: 6px !important;
+    padding: 10px 12px calc(10px + var(--safe-bottom)) !important;
+    flex-shrink: 0 !important;
+  }
+  #rptModalFtr > span{
+    grid-column: 1 / -1 !important;
+    text-align: center !important;
+    margin: 0 0 4px !important;
+    padding: 6px 8px !important;
+    background: var(--g50);
+    border-radius: 8px;
+    font-size: 11px !important;
+  }
+  #rptModalFtr .btn{
+    width: 100% !important;
+    flex: none !important;
+    margin: 0 !important;
+    padding: 11px 6px !important;
+    font-size: 13px !important;
+    min-height: 44px !important;
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
 
   /* ── Sub-modals (Banks form, IC form, etc.) ──────────────────────────── */
   .modal-content{
