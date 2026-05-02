@@ -7819,7 +7819,12 @@ function renderShifts(){
     const now = new Date();
     for(let i=0;i<12;i++){
       const d = new Date(now.getFullYear(), now.getMonth()-i, 1);
-      const val = d.toISOString().substring(0,7);
+      // [Phase C1] Build YYYY-MM from LOCAL date parts (not toISOString → UTC).
+      // In timezones east of UTC (e.g., Egypt UTC+2), `new Date(y,m,1)` is
+      // local-midnight, which `toISOString` shifts back to the previous month
+      // — caused the dropdown value to be one month earlier than its label,
+      // so picking "May 2026" silently filtered for April data.
+      const val = d.getFullYear() + '-' + String(d.getMonth()+1).padStart(2,'0');
       const lbl = d.toLocaleDateString('en-GB',{month:'long',year:'numeric'});
       opts.push('<option value="'+val+'"'+(val===selMonth?' selected':'')+'>'+lbl+'</option>');
     }
@@ -10554,8 +10559,10 @@ async function printFullFile(caseId){
   })()}
   `:''}
 
-  <!-- Labs Breakdown — auto-included if invoice has lab items -->
-  ${(()=>{
+  <!-- Labs Breakdown — auto-included if invoice has lab items [Phase B1d gate] -->
+  <!-- Gated by includeInvoice (same role/insurance rule as the invoice itself):
+       insurance + nurse/manager → hidden; admin/reception or cash → visible. -->
+  ${includeInvoice?(()=>{
     const labInvItem=(c.invoiceItems||[]).find(it=>it._type==='labs');
     const labItems=labInvItem?.labItems||[];
     if(!labItems.length) return '';
@@ -10597,7 +10604,68 @@ async function printFullFile(caseId){
         <td style="padding:6px 8px;text-align:right">${curr} ${labSubtotal.toFixed(2)}</td>
       </tr></tfoot>
     </table>`;
-  })()}
+  })():''}
+
+  <!-- Meds Breakdown — auto-included if breakdown data exists [Phase B1d] -->
+  <!-- Gated by includeInvoice (same as Labs above). Pulls grouped items via the
+       pure helper _computeMedsBreakdown(c) — primary source is the saved
+       invoiceItems[_type='meds'].mbdGroups, fallback rebuilt from medicalReport
+       visits + nursingNotes consumables. Returns empty array when no data. -->
+  ${includeInvoice?(()=>{
+    if(typeof _computeMedsBreakdown!=='function') return '';
+    const mItems=_computeMedsBreakdown(c)||[];
+    if(!mItems.length) return '';
+    let mGrandTotal=0;
+    let mRowsHTML='';
+    let mRowIdx=0;
+    let mGroupSub=0;
+    let mHasOpenGroup=false;
+    mItems.forEach(it=>{
+      if(it.isHeader){
+        if(mHasOpenGroup&&mGroupSub>0){
+          mRowsHTML+='<tr style="background:#D6E4F0"><td colspan="3" style="padding:5px 8px;text-align:right;font-weight:700;color:#1B3A5C">Group Subtotal</td><td style="padding:5px 8px;text-align:right;font-weight:700;color:#1B3A5C">'+mGroupSub.toFixed(2)+'</td></tr>';
+        }
+        mRowsHTML+='<tr><td colspan="4" style="background:#E8F0F8;padding:6px 10px;font-weight:700;color:#1B3A5C;border-top:1px solid #2E75B6">'+it.name.replace('__GROUP__','')+'</td></tr>';
+        mGroupSub=0;mRowIdx=0;mHasOpenGroup=true;
+      } else {
+        const total=(it.price||0)*(it.qty||1);
+        mGroupSub+=total;mGrandTotal+=total;
+        const bg=mRowIdx%2===0?'#EBF3FB':'#fff';
+        mRowsHTML+='<tr style="background:'+bg+'">'
+          +'<td style="padding:5px 8px;border-bottom:1px solid #DDD">'+(it.name||'—')+'</td>'
+          +'<td style="padding:5px 8px;border-bottom:1px solid #DDD;text-align:center;width:60px">'+(it.qty||1)+'</td>'
+          +'<td style="padding:5px 8px;border-bottom:1px solid #DDD;text-align:right;width:90px">'+(it.price||0).toFixed(2)+'</td>'
+          +'<td style="padding:5px 8px;border-bottom:1px solid #DDD;text-align:right;width:90px;font-weight:600">'+total.toFixed(2)+'</td>'
+          +'</tr>';
+        mRowIdx++;
+      }
+    });
+    if(mHasOpenGroup&&mGroupSub>0){
+      mRowsHTML+='<tr style="background:#D6E4F0"><td colspan="3" style="padding:5px 8px;text-align:right;font-weight:700;color:#1B3A5C">Group Subtotal</td><td style="padding:5px 8px;text-align:right;font-weight:700;color:#1B3A5C">'+mGroupSub.toFixed(2)+'</td></tr>';
+    }
+    return `<div style="page-break-before:always;"></div>
+    ${invHeader}
+    <div style="text-align:center;font-size:14px;font-weight:700;color:#1B3A5C;margin-bottom:14px;border-bottom:2px solid #1B3A5C;padding-bottom:6px">MEDICATIONS, DISPOSABLES &amp; CONSUMABLES BREAKDOWN</div>
+    <table style="margin-bottom:12px;font-size:10px;border:1px solid #dee2e6">
+      <tr><td style="background:#2e75b6;color:#fff;font-weight:600;padding:6px 10px;width:130px">Patient</td><td style="padding:6px 10px">${c.patientName||'—'}</td>
+          <td style="background:#2e75b6;color:#fff;font-weight:600;padding:6px 10px;width:130px">DOB</td><td style="padding:6px 10px">${c.dob||'—'}</td></tr>
+      <tr><td style="background:#2e75b6;color:#fff;font-weight:600;padding:6px 10px">Our Ref</td><td style="padding:6px 10px">${c.ourRef||c.id}</td>
+          <td style="background:#2e75b6;color:#fff;font-weight:600;padding:6px 10px">Currency</td><td style="padding:6px 10px">${curr}</td></tr>
+    </table>
+    <table style="font-size:11px;border:1px solid #dee2e6">
+      <thead><tr style="background:#2e75b6;color:#fff">
+        <th style="padding:6px 8px;text-align:left">Item</th>
+        <th style="padding:6px 8px;text-align:center;width:60px">Qty</th>
+        <th style="padding:6px 8px;text-align:right;width:100px">Unit (${curr})</th>
+        <th style="padding:6px 8px;text-align:right;width:100px">Total (${curr})</th>
+      </tr></thead>
+      <tbody>${mRowsHTML}</tbody>
+      <tfoot><tr style="background:#1B3A5C;color:#fff;font-weight:700">
+        <td colspan="3" style="padding:6px 8px">TOTAL</td>
+        <td style="padding:6px 8px;text-align:right">${curr} ${mGrandTotal.toFixed(2)}</td>
+      </tr></tfoot>
+    </table>`;
+  })():''}
   ${pdfRenderScript}
 
     </body></html>`;
