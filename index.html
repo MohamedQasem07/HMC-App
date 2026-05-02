@@ -11775,9 +11775,10 @@ function renderTreasury(){
   </div>`:'';
 
   // ── VISA TRANSACTIONS list for handover section
+  // [Phase C3] include rate so the per-tx Rate column populates correctly
   const visaTxDetails = visaRows.map(r=>({
     patient:r.patient, currency:r.currency, amount:r.amount,
-    egp:r.egp, date:r.date
+    rate:r.rate, egp:r.egp, date:r.date
   }));
 
   return`
@@ -11917,22 +11918,38 @@ function renderTreasury(){
     <div style="background:var(--pf);border-radius:var(--ra);padding:14px;margin-bottom:14px;border:1px solid #c0d8ee">
       <div style="font-size:13px;font-weight:700;color:var(--p);margin-bottom:10px">💳 Visa Transactions — Bank Batch</div>
       <div style="margin-bottom:10px">
+        <!-- [Phase C3] 9-col Visa table: # | Patient | Date | Curr | Orig Amount | Rate | Expected EGP | Actual EGP | Diff -->
         <div class="tw"><table style="font-size:12px">
-          <thead><tr><th>#</th><th>Patient</th><th>Date</th><th>Currency</th><th>System Amount</th><th>EGP Equiv</th><th>✏️ Actual Received</th><th>Diff</th></tr></thead>
-          <tbody>${visaTxDetails.map((v,i)=>`<tr>
+          <thead><tr><th>#</th><th>Patient</th><th>Date</th><th>Curr</th><th>Orig Amount</th><th>Rate</th><th>Expected EGP</th><th>✏️ Actual EGP</th><th>Diff</th></tr></thead>
+          <tbody>${visaTxDetails.map((v,i)=>{
+            const expEGP=_visaExpectedEGP(v);
+            const rateNum=parseFloat(v.rate)||0;
+            const rateCell=rateNum>0
+              ? rateNum.toFixed(2)
+              : (v.currency==='EGP' ? '—' : '<span title="No rate entered" style="color:var(--am)">⚠️ N/A</span>');
+            return `<tr>
             <td>${i+1}</td>
             <td style="font-weight:500">${v.patient}</td>
             <td>${fmtDate(v.date)}</td>
             <td>${v.currency}</td>
-            <td style="font-weight:600">${v.amount.toLocaleString()}</td>
-            <td style="color:var(--g600)">${v.egp?v.egp.toLocaleString()+' EGP':'—'}</td>
-            <td><input type="number" value="${v.amount}" id="visa_actual_${i}"
-              style="width:90px;padding:4px 6px;border:1px solid var(--g200);border-radius:5px;font-size:12px;text-align:center"
-              oninput="checkVisaTx(${i},${v.amount})"></td>
+            <td style="font-weight:600">${(parseFloat(v.amount)||0).toLocaleString()}</td>
+            <td style="text-align:center">${rateCell}</td>
+            <td style="color:var(--g600);font-weight:600">${expEGP?expEGP.toLocaleString()+' EGP':'—'}</td>
+            <td><input type="number" value="${expEGP}" id="visa_actual_${i}"
+              style="width:100px;padding:4px 6px;border:1px solid var(--g200);border-radius:5px;font-size:12px;text-align:center"
+              oninput="checkVisaTx(${i},${expEGP})"></td>
             <td><span id="visa_tx_diff_${i}" style="font-size:11px;font-weight:600"></span></td>
-          </tr>`).join('')||'<tr><td colspan="8" style="text-align:center;color:var(--g500);padding:12px">No visa transactions pending</td></tr>'}</tbody>
+          </tr>`;
+          }).join('')||'<tr><td colspan="9" style="text-align:center;color:var(--g500);padding:12px">No visa transactions pending</td></tr>'}</tbody>
         </table></div>
       </div>
+      <!-- [Phase C3] FX Settlement summary -->
+      ${(()=>{const initialExp=visaTxDetails.reduce((s,v)=>s+_visaExpectedEGP(v),0);return `
+      <div style="background:#fff;border-radius:var(--ra);padding:10px 14px;border:1px solid #c0d8ee;margin-bottom:10px">
+        <div style="font-size:10px;color:var(--g500);text-transform:uppercase;letter-spacing:.05em;margin-bottom:4px">💱 Visa FX Settlement</div>
+        <div id="visa_summary_diff" style="font-size:13px">Expected: <strong>${initialExp.toLocaleString()} EGP</strong> &middot; Actual: <strong>${initialExp.toLocaleString()} EGP</strong> &middot; Settlement &Delta;: <strong style="color:var(--gr)">+0 EGP</strong></div>
+        <span id="visa_actual_total" style="display:none">${initialExp}</span>
+      </div>`;})()}
       <div style="background:#fff;border-radius:var(--ra);padding:10px 14px;border:1px solid #c0d8ee">
         <div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:12px;align-items:center">
           <div style="text-align:center">
@@ -12205,11 +12222,53 @@ function calcHandoverDiff(curr, bookBalance){
     else stEl.textContent='';
   }
 }
+// [Phase C3] Pure: expected EGP for a Visa tx detail row.
+// Fallback chain: stored egp -> amount*rate -> amount (assumed EGP-native).
+function _visaExpectedEGP(v){
+  if(!v) return 0;
+  const stored=parseFloat(v.egp); if(stored>0) return stored;
+  const amt=parseFloat(v.amount)||0;
+  const rate=parseFloat(v.rate)||0;
+  if(amt>0&&rate>0) return amt*rate;
+  return amt; // EGP-native or no rate
+}
+// [Phase C3] Normalize visaTxActuals to a flat number[] aligned to details.
+// Defensive: handles undefined, [], flat numbers, or future object shape.
+function _normalizeVisaActuals(arr,details){
+  const len=(details||[]).length;
+  const out=new Array(len).fill(0);
+  if(!Array.isArray(arr)) return out;
+  for(let i=0;i<len;i++){
+    const x=arr[i]; if(x==null) continue;
+    if(typeof x==='number') out[i]=x;
+    else if(typeof x==='object') out[i]=parseFloat(x.actualEGP||x.egp||x.amount)||0;
+    else out[i]=parseFloat(x)||0;
+  }
+  return out;
+}
+// [Phase C3] calcVisaTotal — now exposes Expected / Actual / Settlement Δ.
 function calcVisaTotal(){
-  let total=0;
-  document.querySelectorAll('[id^="visa_actual_"]').forEach(inp=>{if(inp.type==='number')total+=parseFloat(inp.value)||0;});
-  const el=document.getElementById('visa_actual_total');if(el)el.textContent=total.toLocaleString()+' EGP';
-  const el2=document.getElementById('visa_summary_diff');if(el2)el2.innerHTML='Actual: <strong>'+total.toLocaleString()+' EGP</strong>';
+  let actualTot=0, expectedTot=0;
+  document.querySelectorAll('[id^="visa_actual_"]').forEach(inp=>{
+    if(inp.type==='number') actualTot+=parseFloat(inp.value)||0;
+    const td=inp.closest('tr')?.children?.[6]; // 7th col = Expected EGP
+    if(td){
+      const n=parseFloat(td.textContent.replace(/[^0-9.\-]/g,''))||0;
+      expectedTot+=n;
+    }
+  });
+  const diff=actualTot-expectedTot;
+  const totEl=document.getElementById('visa_actual_total');
+  if(totEl) totEl.textContent=actualTot.toLocaleString()+' EGP';
+  const sumEl=document.getElementById('visa_summary_diff');
+  if(sumEl){
+    const color=Math.abs(diff)<0.01?'var(--gr)':diff<0?'var(--red)':'var(--am)';
+    const sign=diff>0?'+':'';
+    sumEl.innerHTML=
+      'Expected: <strong>'+expectedTot.toLocaleString()+' EGP</strong>'+
+      ' &middot; Actual: <strong>'+actualTot.toLocaleString()+' EGP</strong>'+
+      ' &middot; Settlement &Delta;: <strong style="color:'+color+'">'+sign+diff.toLocaleString()+' EGP</strong>';
+  }
 }
 function markVisaOk(i){
   const chk=document.getElementById('visa_chk_'+i);
@@ -12217,7 +12276,21 @@ function markVisaOk(i){
   if(row) row.style.background=chk?.checked?'var(--gl)':'';
   calcVisaTotal();
 }
-function checkVisaTx(i,expected){calcVisaTotal();}
+// [Phase C3] checkVisaTx — populates per-row diff span + recomputes summary.
+function checkVisaTx(i,expected){
+  const inp=document.getElementById('visa_actual_'+i);
+  const span=document.getElementById('visa_tx_diff_'+i);
+  if(span){
+    const actual=parseFloat(inp?.value)||0;
+    const exp=parseFloat(expected)||0;
+    const diff=actual-exp;
+    const color=Math.abs(diff)<0.01?'var(--gr)':diff<0?'var(--red)':'var(--am)';
+    const sign=diff>0?'+':'';
+    span.textContent=Math.abs(diff)<0.01?'✅ 0':(sign+diff.toLocaleString()+' EGP');
+    span.style.color=color;
+  }
+  calcVisaTotal();
+}
 function calcCurrTotal(curr){
   const denoms = {EGP:[200,100,50,20,10,5,1],EUR:[500,200,100,50,20,10,5],USD:[100,50,20,10,5,1],GBP:[50,20,10,5,1]};
   let total=0;
@@ -12428,7 +12501,8 @@ function printHandoverHTML({recv,from,to,visaActualCount,denomCounts,handedBy,br
   const CURR_DENOMS={EGP:[200,100,50,20,10,5,1],EUR:[500,200,100,50,20,10,5],USD:[100,50,20,10,5,1],GBP:[50,20,10,5,1]};
   expenses=expenses||[];
   visaTxDetails=visaTxDetails||[];
-  visaTxActuals=visaTxActuals||[];
+  // [Phase C3] Normalize actuals to flat number[] aligned to details — defensive for old/missing/sparse rows.
+  visaTxActuals=_normalizeVisaActuals(visaTxActuals,visaTxDetails);
   const dateStr=datetime?new Date(datetime).toLocaleString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}):new Date().toLocaleString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'});
 
   // ── Expense totals per currency ──
@@ -12503,35 +12577,53 @@ function printHandoverHTML({recv,from,to,visaActualCount,denomCounts,handedBy,br
     </div>`;
   }
 
-  // ── Visa section ──
+  // ── Visa section ── [Phase C3] 9-col per-tx table + FX settlement roll-up
   const sysVisaCount=visaTxDetails.length;
-  const sysVisaValueEGP=visaTxDetails.reduce((s,v)=>s+(parseFloat(v.egp)||parseFloat(v.amount)||0),0);
+  const sysVisaExpectedEGP=visaTxDetails.reduce((s,v)=>s+_visaExpectedEGP(v),0);
   const sysVisaValueByOriginal={};
   visaTxDetails.forEach(v=>{const c=v.currency||'EGP';sysVisaValueByOriginal[c]=(sysVisaValueByOriginal[c]||0)+(parseFloat(v.amount)||0);});
-  
+
   const actualVisaValueEGP=visaTxActuals.reduce((s,v)=>s+v,0);
   const countMatch=visaActualCount===sysVisaCount;
-  const valueMatch=Math.abs(actualVisaValueEGP-sysVisaValueEGP)<0.01;
+  const valueMatch=Math.abs(actualVisaValueEGP-sysVisaExpectedEGP)<0.01;
 
+  let visaSettlementDiff=0;
   const visaTxRows=visaTxDetails.map((v,i)=>{
-    const actual=visaTxActuals[i]||v.amount;
-    const diff=actual-(parseFloat(v.amount)||0);
+    const expEGP=_visaExpectedEGP(v);
+    const actual=visaTxActuals[i]!=null?visaTxActuals[i]:expEGP;
+    const diff=actual-expEGP; // [Phase C3] fix: compare EGP to expected EGP, not to original-currency amount
+    visaSettlementDiff+=diff;
+    const rateNum=parseFloat(v.rate)||0;
+    const rateStr=rateNum>0
+      ? rateNum.toFixed(2)
+      : (v.currency==='EGP' ? '—' : '⚠️ N/A');
+    const diffColor=Math.abs(diff)<0.01?'#219150':diff<0?'#c62828':'#e65100';
+    const diffTxt=Math.abs(diff)<0.01?'0':((diff>0?'+':'')+diff.toFixed(0));
     return `<tr>
       <td style="padding:4px 8px;border:1px solid #e0e0e0;text-align:center">${i+1}</td>
       <td style="padding:4px 8px;border:1px solid #e0e0e0">${v.patient}</td>
       <td style="padding:4px 8px;border:1px solid #e0e0e0;font-size:11px">${v.date||'—'}</td>
-      <td style="padding:4px 8px;border:1px solid #e0e0e0">${v.currency}</td>
+      <td style="padding:4px 8px;border:1px solid #e0e0e0;text-align:center">${v.currency}</td>
       <td style="padding:4px 8px;border:1px solid #e0e0e0;text-align:right;font-weight:600">${(parseFloat(v.amount)||0).toLocaleString()}</td>
-      <td style="padding:4px 8px;border:1px solid #e0e0e0;text-align:right;font-size:11px;color:#555">${v.egp?(parseFloat(v.egp)||0).toLocaleString()+' EGP':'—'}</td>
-      <td style="padding:4px 8px;border:1px solid #e0e0e0;text-align:right;font-weight:600;color:${diff===0?'#219150':diff<0?'#c62828':'#e65100'}">${actual.toLocaleString()}${diff!==0?' ('+( diff>0?'+':'')+diff.toFixed(0)+')':''}</td>
+      <td style="padding:4px 8px;border:1px solid #e0e0e0;text-align:center">${rateStr}</td>
+      <td style="padding:4px 8px;border:1px solid #e0e0e0;text-align:right;color:#0e3d72;font-weight:600">${expEGP.toLocaleString()}</td>
+      <td style="padding:4px 8px;border:1px solid #e0e0e0;text-align:right;font-weight:700">${actual.toLocaleString()}</td>
+      <td style="padding:4px 8px;border:1px solid #e0e0e0;text-align:right;font-weight:700;color:${diffColor}">${diffTxt}</td>
     </tr>`;
   }).join('');
+
+  const settleColor=Math.abs(visaSettlementDiff)<0.01?'#219150':visaSettlementDiff<0?'#c62828':'#e65100';
+  const settleSign=visaSettlementDiff>0?'+':'';
+  const visaSettlementRow=visaTxDetails.length>0?`<tr style="background:#fff7e6">
+      <td colspan="8" style="padding:7px 10px;border:1px solid #ffd699;font-weight:700;text-align:right">🧾 Visa Settlement Discrepancy (Σ Actual − Σ Expected)</td>
+      <td style="padding:7px 10px;border:1px solid #ffd699;text-align:right;font-weight:700;color:${settleColor}">${settleSign}${visaSettlementDiff.toFixed(0)} EGP</td>
+    </tr>`:'';
 
   const visaSection=`<div style="margin-bottom:20px">
     <div style="font-size:13px;font-weight:700;color:#1a5fa8;margin-bottom:8px;padding-bottom:5px;border-bottom:2px solid #bbdefb">💳 Visa Transactions — Bank Batch</div>
     ${visaTxDetails.length>0?`<table style="width:100%;border-collapse:collapse;font-size:12px;margin-bottom:10px">
-      <thead><tr style="background:#e3f2fd"><th style="padding:5px 8px;border:1px solid #e0e0e0">#</th><th style="padding:5px 8px;border:1px solid #e0e0e0;text-align:left">Patient</th><th style="padding:5px 8px;border:1px solid #e0e0e0;text-align:left">Date</th><th style="padding:5px 8px;border:1px solid #e0e0e0">Curr</th><th style="padding:5px 8px;border:1px solid #e0e0e0;text-align:right">System Amount</th><th style="padding:5px 8px;border:1px solid #e0e0e0;text-align:right">EGP</th><th style="padding:5px 8px;border:1px solid #e0e0e0;text-align:right">Actual</th></tr></thead>
-      <tbody>${visaTxRows}</tbody>
+      <thead><tr style="background:#e3f2fd"><th style="padding:5px 8px;border:1px solid #e0e0e0">#</th><th style="padding:5px 8px;border:1px solid #e0e0e0;text-align:left">Patient</th><th style="padding:5px 8px;border:1px solid #e0e0e0;text-align:left">Date</th><th style="padding:5px 8px;border:1px solid #e0e0e0">Curr</th><th style="padding:5px 8px;border:1px solid #e0e0e0;text-align:right">Orig Amount</th><th style="padding:5px 8px;border:1px solid #e0e0e0">Rate</th><th style="padding:5px 8px;border:1px solid #e0e0e0;text-align:right">Expected EGP</th><th style="padding:5px 8px;border:1px solid #e0e0e0;text-align:right">Actual EGP</th><th style="padding:5px 8px;border:1px solid #e0e0e0;text-align:right">Diff</th></tr></thead>
+      <tbody>${visaTxRows}${visaSettlementRow}</tbody>
     </table>`:'<div style="padding:10px;color:#aaa;font-size:12px">No visa transactions in this period</div>'}
     <table style="width:100%;border-collapse:collapse;font-size:13px">
       <tr><td style="padding:7px 10px;border:1px solid #bbdefb;background:#e3f2fd">System Count</td><td style="padding:7px 10px;border:1px solid #bbdefb;font-weight:700;text-align:right">${sysVisaCount} transactions</td><td style="padding:7px 10px;border:1px solid #bbdefb;font-weight:700;text-align:right">${Object.entries(sysVisaValueByOriginal).map(([c,v])=>v.toLocaleString()+' '+c).join(' + ')||'—'}</td></tr>
