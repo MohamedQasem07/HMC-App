@@ -10514,20 +10514,31 @@ async function printFullFile(caseId){
   <!-- Medical Report SECOND -->
   ${rptSection}
 
-  <!-- Invoice THIRD — whenever admin added payments (cash or insurance) -->
+  <!-- Invoice THIRD — full invoice via shared buildInvoiceBodyHTML helper [Phase B1b] -->
+  <!-- Replaces the legacy summary block. Reads opts from saved case fields
+       (saveInvToCase persists discount, excess, exRate, transferBank, transferCurrency).
+       inv_type is not persisted, defaults to Final Invoice. The helper provides
+       its own clinic header so the surrounding invHeader wrap is no longer needed. -->
   ${total>0?`
   <div style="page-break-before:always;"></div>
-  ${invHeader}
-  <div style="text-align:center;font-size:15px;font-weight:700;color:#1B3A5C;margin-bottom:14px">INVOICE SUMMARY</div>
-  <table style="margin-bottom:12px;font-size:11px;border:1px solid #dee2e6">
-    <tr><td style="background:#eaf1fb;font-weight:600;width:130px">Patient</td><td>${c.patientName||'—'}</td>
-        <td style="background:#eaf1fb;font-weight:600;width:130px">Our Ref</td><td>${c.ourRef||c.id}</td></tr>
-    <tr><td style="background:#eaf1fb;font-weight:600">Date</td><td>${fmtDate(c.invoiceDate||c.kaDate)}</td>
-        <td style="background:#eaf1fb;font-weight:600">Currency</td><td>${curr}</td></tr>
-    <tr><td style="background:#eaf1fb;font-weight:600">Status</td><td colspan="3">${c.invoiceStatus||'—'}</td></tr>
-  </table>
-  ${payRows?`<table style="margin-bottom:12px;font-size:11px"><thead><tr style="background:#1a5fa8;color:#fff"><th>Payment Method</th><th style="text-align:right">Amount</th></tr></thead><tbody>${payRows}</tbody>
-  <tfoot><tr style="background:#1B3A5C;color:#fff;font-weight:700"><td>TOTAL</td><td style="text-align:right">${curr} ${total.toLocaleString()}</td></tr></tfoot></table>`:''}
+  ${(function(){
+    const opts = {
+      type: 'Final Invoice',
+      currency: c.currency||'EUR',
+      logoChoice: c.facility==='SMC'?'sahl':'hmc',
+      items: c.invoiceItems||[],
+      excess: c.excessAmount||0,
+      discountPct: c.invoiceDiscountPct||0,
+      discountAmt: c.invoiceDiscountAmt||0,
+      exRate: c.exRate||0,
+      admissionDate: c.kaDate||c.arrivalDate||'',
+      dischargeDate: c.dischargeDate||c.departureDate||'',
+      bankId: c.transferBank||((typeof getBanksForCase==='function')?(getBanksForCase(c)[0]?.id||'aaib_hmc'):'aaib_hmc'),
+      bankCurrency: c.transferCurrency||c.currency||'EUR',
+      isInsuranceMode: isInsuranceCase(c)||(c.payments||[]).some(p=>p.method==='Insurance'),
+    };
+    return buildInvoiceBodyHTML(c, opts);
+  })()}
   `:''}
 
   <!-- Labs Breakdown — auto-included if invoice has lab items -->
