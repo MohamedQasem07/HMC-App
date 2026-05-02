@@ -10003,70 +10003,45 @@ function _printBreakdownDetailed(type,title,color){
   w.document.write(html);w.document.close();
 }
 
-function printInv(){
-  const cid=document.getElementById('inv_cid').value;
-  const c=getCases().find(x=>x.id===cid)||{};
-  const type=document.getElementById('inv_type')?.value||'Final Invoice';
-  const curr=document.getElementById('inv_curr')?.value||'EUR';
-  const logoChoice=document.querySelector('input[name="inv_logo"]:checked')?.value||'hmc';
-  const isSahl=logoChoice==='sahl';
-  const subtotal=INV_ITEMS.reduce((s,x)=>s+x.total,0);
-  const excess=parseFloat(document.getElementById('inv_excess')?.value)||0;
-  const discPct=parseFloat(document.getElementById('inv_discount_pct')?.value)||0;
-  const discAmt=parseFloat(document.getElementById('inv_discount_amt')?.value)||0;
-  const discountTotal=discAmt+(discPct>0?subtotal*discPct/100:0);
-  const tot=Math.max(0,subtotal-excess-discountTotal);
-  const isPackage=type==='Package Invoice';
+// [Phase B1a] Pure invoice body builder — no DOM reads, no side effects.
+// Produces the HTML that goes INSIDE <body> for the standalone invoice print
+// (header → title → patient table → MEDICAL SERVICES → ADMISSION FEES → totals
+// → signature/bank → footer → print stamp). Caller wraps with DOCTYPE/style.
+//
+// `c`    — case object
+// `opts` — explicit options. All optional; safe defaults below.
+//   { type, currency, logoChoice, items, excess, discountPct, discountAmt,
+//     exRate, admissionDate, dischargeDate, bankId, bankCurrency,
+//     isInsuranceMode }
+//
+// Output is byte-identical to the legacy printInv body (modulo the popup-only
+// "Print / Save as PDF" button which the wrapper still adds in printInv only).
+function buildInvoiceBodyHTML(c, opts){
+  opts = opts || {};
+  const type = opts.type || 'Final Invoice';
+  const curr = opts.currency || 'EUR';
+  const isSahl = opts.logoChoice === 'sahl';
+  const items = opts.items || [];
+  const excess = parseFloat(opts.excess)||0;
+  const discPct = parseFloat(opts.discountPct)||0;
+  const discAmt = parseFloat(opts.discountAmt)||0;
+  const exRate = parseFloat(opts.exRate)||0;
+  const invAdmission = opts.admissionDate || c.kaDate || c.arrivalDate || '';
+  const invDischarge = opts.dischargeDate || c.dischargeDate || c.departureDate || '';
+  const isIns = !!opts.isInsuranceMode;
+  const subtotal = items.reduce((s,x)=>s+(x.total||0),0);
+  const discountTotal = discAmt + (discPct>0 ? subtotal*discPct/100 : 0);
+  const tot = Math.max(0, subtotal - excess - discountTotal);
 
-  // Save invoice items and total to case for future editing
-  if(cid){
-    const cs=getCases();const idx=cs.findIndex(x=>x.id===cid);
-    if(idx>=0){
-      cs[idx].invoiceItems=[...INV_ITEMS];
-      cs[idx].invoiceAmount=tot;
-      cs[idx].currency=curr;
-      cs[idx].invoiceDate=cs[idx].invoiceDate||new Date().toISOString().split('T')[0];
-      saveCases(cs);
-      pushCase(cs[idx]).catch(()=>{});
-    }
-  }
-
-  // Phase 1.1: use full SMC banner image for SMC, text header for HMC
-  const invHeader=isSahl
-    ?`<div style="margin-bottom:14px"><img src="${SMC_HEADER_B64}" style="width:100%;max-width:900px;object-fit:contain;display:block"></div>`
-    :`<div style="display:flex;align-items:center;justify-content:space-between;padding-bottom:10px;border-bottom:2.5px solid #C00000;margin-bottom:16px">
-      <img src="${HMC_LOGO_B64}" style="height:56px;object-fit:contain">
-      <div style="text-align:right;line-height:1.8">
-        <strong style="font-size:9pt;color:#1B3A5C;display:block">HURGHADA MEDICAL CENTER</strong>
-        <span style="font-size:7pt;color:#1B3A5C;display:block">BUILDING 306, ELKAWTHER STREET, HURGHADA, EGYPT</span>
-        <span style="font-size:7pt;color:#1B3A5C;display:block">WEBSITE: WWW.HURGHADAMEDICALCENTER.COM</span>
-        <span style="font-size:7pt;color:#1B3A5C;display:block">EMAIL: INFO@HURGHADAMEDICALCENTER.COM</span>
-        <span style="font-size:7pt;color:#1B3A5C;display:block">TEL: +2 012 0388 1077 / +2 012 0388 2077 &nbsp;|&nbsp; TEL&FAX: +2 065 340 3500</span>
-      </div>
-    </div>`;
-
-  // Phase 1.1: use SMC footer image (red line + email + blue bar) for SMC
-  const invFooter=isSahl
-    ?`<div style="margin-top:14px"><img src="${SMC_FOOTER_B64}" style="width:100%;max-width:900px;object-fit:contain;display:block"></div>`
-    :`<div style="text-align:center;font-size:8pt;color:#1B3A5C;border-top:2px solid #C00000;padding-top:8px;margin-top:16px">HURGHADA MEDICAL CENTER | Building 306, Elkawther Street, Hurghada | Tel: +2 012 0388 1077 | info@hurghadamedicalcenter.com</div>`;
-
-  // [Session #6 Wave2 #9-#11] Bank details — driven by case.transferBank + transferCurrency.
-  // Falls back to AAIB EUR if not set (preserves existing behavior for legacy invoices).
-  // [Session #7 H1] Bank/currency for the invoice — read from the inline picker
-  // (`inv_bank` / `inv_bank_curr`) if present; fall back to case value; final fallback
-  // is the first matching-facility bank. Legacy 'aaib' / 'cib' IDs are aliased.
-  const _invBankEl = document.getElementById('inv_bank');
-  const _invCurrEl = document.getElementById('inv_bank_curr');
-  const _selectedBankId = (_invBankEl && _invBankEl.value) || c.transferBank ||
+  // Bank details — uses opts.bankId / opts.bankCurrency. Falls back to first
+  // matching-facility bank if not set (preserves legacy invoice behavior).
+  const _selectedBankId = opts.bankId || c.transferBank ||
     ((typeof getBanksForCase==='function') ? (getBanksForCase(c)[0]?.id||'aaib_hmc') : 'aaib_hmc');
   const _selectedBank = (typeof getBankById==='function') ? getBankById(_selectedBankId) : APPROVED_BANKS[0];
-  const _xferCurr = (_invCurrEl && _invCurrEl.value) || c.transferCurrency || curr;
+  const _xferCurr = opts.bankCurrency || c.transferCurrency || curr;
   const _bankAccount = (typeof getBankAccount==='function') ? getBankAccount(_selectedBankId, _xferCurr) : (_selectedBank.accounts[_xferCurr]||_selectedBank.accounts.EUR);
   const bankAcc = _bankAccount.acc;
   const bankIBAN = _bankAccount.iban;
-  const exRate=parseFloat(document.getElementById('inv_ex_rate')?.value)||0;
-  const invDischarge=document.getElementById('inv_discharge')?.value||c.dischargeDate||c.departureDate||'';
-  const invAdmission=document.getElementById('inv_admission')?.value||c.kaDate||c.arrivalDate||'';
   const fmtAdmission=fmtDate(invAdmission)||invAdmission||'—';
   const fmtDischarge=fmtDate(invDischarge)||invDischarge||'—';
   // Compute stay days for section header
@@ -10075,17 +10050,14 @@ function printInv(){
     const d1=new Date(invAdmission),d2=new Date(invDischarge);
     stayDays=Math.max(1,Math.round((d2-d1)/86400000)+1);
   }
-  // Detect insurance mode
-  const isIns=isInsuranceCase(c)||(c.payments||[]).some(p=>p.method==='Insurance');
   const insRef=isIns?(c.insuranceRef||'—'):'N/A';
   const insCoName=isIns?(c.insuredBy||'—'):'Self-Pay';
-  const caseType=c.status||(c.caseType||'Outpatient');
   // Split items: Medical Services / Accommodation (which contains SC + Meds) — meds ALWAYS last row
   const _ACCOM=['accommodation'];
-  const _medsLast=INV_ITEMS.filter(x=>x._type==='meds');
-  const _scItem=INV_ITEMS.filter(x=>x._type==='sc');
-  const _accOnly=INV_ITEMS.filter(x=>_ACCOM.includes(x._type));
-  const _medOnly=INV_ITEMS.filter(x=>x._type!=='meds'&&x._type!=='sc'&&!_ACCOM.includes(x._type));
+  const _medsLast=items.filter(x=>x._type==='meds');
+  const _scItem=items.filter(x=>x._type==='sc');
+  const _accOnly=items.filter(x=>_ACCOM.includes(x._type));
+  const _medOnly=items.filter(x=>x._type!=='meds'&&x._type!=='sc'&&!_ACCOM.includes(x._type));
   const _mkRow=(it,i)=>{
     const bg=i%2===0?'#EBF3FB':'#fff';
     const unitVal=(typeof it.unit==='number'?it.unit:it.total)||0;
@@ -10129,15 +10101,11 @@ function printInv(){
          </td>
        </tr></table>
        <hr style="border:none;border-top:2px solid #C00000;margin:6px 0 10px">`;
-  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Invoice ${c.ourRef||c.id}</title>
-  <style>
-    *{box-sizing:border-box;margin:0;padding:0;-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;color-adjust:exact !important}
-    body{font-family:'Trebuchet MS',Arial,sans-serif;font-size:10pt;color:#000;margin:0;padding:14px 18px;background:#fff;-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important}
-    table{width:100%;border-collapse:collapse}
-    th,td{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important}
-    @media print{body{padding:0 14px}@page{margin:10mm 12mm}.noprint{display:none !important}}
-  </style></head><body>
-
+  // [Phase B1a] Return body HTML only — the wrapper (DOCTYPE/head/style/body
+  // tags + popup-only Print button) is added by `printInv` for the standalone
+  // print window. Other callers (e.g. printFullFile in Phase B1b) inject this
+  // body content directly into their own combined-document layout.
+  return `
   <!-- HEADER -->
   ${headerHTML}
 
@@ -10267,7 +10235,64 @@ function printInv(){
        </div>`}
   <!-- [Session #5 BUG-06] Print date stamp on invoice -->
   <div style="margin-top:4px;text-align:right;font-size:8pt;color:#666;font-style:italic">Printed: ${new Date().toLocaleString('en-GB',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'})}</div>
+  `;
+}
 
+// ── Standalone Invoice Print — Invoice Builder → Preview & Print ──
+// Reads live form fields, persists invoice state to the case, then renders
+// the body via buildInvoiceBodyHTML and wraps it in a print-ready window.
+function printInv(){
+  const cid=document.getElementById('inv_cid').value;
+  const c=getCases().find(x=>x.id===cid)||{};
+  const type=document.getElementById('inv_type')?.value||'Final Invoice';
+  const curr=document.getElementById('inv_curr')?.value||'EUR';
+  const logoChoice=document.querySelector('input[name="inv_logo"]:checked')?.value||'hmc';
+  const subtotal=INV_ITEMS.reduce((s,x)=>s+x.total,0);
+  const excess=parseFloat(document.getElementById('inv_excess')?.value)||0;
+  const discPct=parseFloat(document.getElementById('inv_discount_pct')?.value)||0;
+  const discAmt=parseFloat(document.getElementById('inv_discount_amt')?.value)||0;
+  const discountTotal=discAmt+(discPct>0?subtotal*discPct/100:0);
+  const tot=Math.max(0,subtotal-excess-discountTotal);
+
+  // Save invoice items and total to case for future editing (existing behavior preserved)
+  if(cid){
+    const cs=getCases();const idx=cs.findIndex(x=>x.id===cid);
+    if(idx>=0){
+      cs[idx].invoiceItems=[...INV_ITEMS];
+      cs[idx].invoiceAmount=tot;
+      cs[idx].currency=curr;
+      cs[idx].invoiceDate=cs[idx].invoiceDate||new Date().toISOString().split('T')[0];
+      saveCases(cs);
+      pushCase(cs[idx]).catch(()=>{});
+    }
+  }
+
+  // Build options for the body helper from live form fields.
+  const opts = {
+    type: type,
+    currency: curr,
+    logoChoice: logoChoice,
+    items: [...INV_ITEMS],
+    excess: excess,
+    discountPct: discPct,
+    discountAmt: discAmt,
+    exRate: parseFloat(document.getElementById('inv_ex_rate')?.value)||0,
+    admissionDate: document.getElementById('inv_admission')?.value||c.kaDate||c.arrivalDate||'',
+    dischargeDate: document.getElementById('inv_discharge')?.value||c.dischargeDate||c.departureDate||'',
+    bankId: document.getElementById('inv_bank')?.value||c.transferBank||'',
+    bankCurrency: document.getElementById('inv_bank_curr')?.value||c.transferCurrency||curr,
+    isInsuranceMode: isInsuranceCase(c)||(c.payments||[]).some(p=>p.method==='Insurance'),
+  };
+  const bodyHTML = buildInvoiceBodyHTML(c, opts);
+
+  const html=`<!DOCTYPE html><html><head><meta charset="UTF-8"><title>Invoice ${c.ourRef||c.id}</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;color-adjust:exact !important}
+    body{font-family:'Trebuchet MS',Arial,sans-serif;font-size:10pt;color:#000;margin:0;padding:14px 18px;background:#fff;-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important}
+    table{width:100%;border-collapse:collapse}
+    th,td{-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important}
+    @media print{body{padding:0 14px}@page{margin:10mm 12mm}.noprint{display:none !important}}
+  </style></head><body>${bodyHTML}
   <!-- Print button inside the new window — hidden when printing -->
   <div class="noprint" style="margin:14px 0 4px;text-align:center">
     <button onclick="document.querySelectorAll('.noprint').forEach(e=>e.style.display='none');window.print();setTimeout(()=>document.querySelectorAll('.noprint').forEach(e=>e.style.display=''),1000);" style="background:#1B3A5C;color:#fff;border:none;padding:10px 28px;border-radius:6px;font-size:13px;cursor:pointer">🖨️ Print / Save as PDF</button>
