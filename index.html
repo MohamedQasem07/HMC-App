@@ -12567,21 +12567,36 @@ function _tallyDailyRevenue(cases){
 }
 window._tallyDailyRevenue = _tallyDailyRevenue;
 
-function viewDailyReport(branchId){
+function viewDailyReport(branchId, dateISO){
   // [Phase A] Defensive branch lock — non-admin/reception cannot view another
   // branch even if branchId is passed in by a manipulated DOM/event handler.
   const isMultiBranch = (CU && (CU.role==='admin'||CU.role==='reception'));
   const safeBranch = isMultiBranch ? (branchId||CU.branch) : CU.branch;
   const br=getBr(safeBranch);
   const today=new Date().toISOString().split('T')[0];
-  const cases=getCases().filter(c=>c.branch===safeBranch&&c.kaDate===today&&canView(CU,c));
+  // [Phase B2] dateISO param — backward compatible. Defaults to today when
+  // omitted. Validated as YYYY-MM-DD ≤ today (no future dates). Branch
+  // isolation from Phase A above is preserved.
+  const reportDate = (dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO) && dateISO <= today) ? dateISO : today;
+  const cases=getCases().filter(c=>c.branch===safeBranch&&c.kaDate===reportDate&&canView(CU,c));
   const natCount={};cases.forEach(c=>{const n=c.nationality||'Unknown';natCount[n]=(natCount[n]||0)+1;});
   const {cashEGP, visaCount, txCount, insCount} = _tallyDailyRevenue(cases);
   // Open modal FIRST, then populate body
   openM('dailyRptModal');
   const body=document.getElementById('dailyRptBody');
   if(!body) return;
+  // [Phase B2] safeBranch is encoded for inline onclick (string-vs-empty already
+  // normalized — defaults to '' when CU has no branch). reportDate is the
+  // currently-shown date.
+  const _sbArg = JSON.stringify(safeBranch||'');
   body.innerHTML=`
+  <div style="padding:4px 0 12px;display:flex;flex-wrap:wrap;gap:8px;align-items:center;border-bottom:1px solid var(--g100);margin-bottom:10px">
+    <span style="font-size:12px;color:var(--g600);font-weight:600">📅 Report Date</span>
+    <input type="date" id="dr_date" class="fsi" value="${reportDate}" max="${today}" style="width:155px" onchange="viewDailyReport(${_sbArg}, this.value)">
+    <button class="btn bs btn-sm" onclick="viewDailyReport(${_sbArg})">Today</button>
+    <button class="btn bp btn-sm" onclick="printDailyReport(${_sbArg}, document.getElementById('dr_date').value)">🖨️ Print</button>
+    <span style="font-size:12px;color:var(--g500);margin-left:auto;font-weight:500">${br.name}</span>
+  </div>
   <div style="padding:4px 0 16px;display:flex;gap:10px;flex-wrap:wrap">
     <div style="background:#f0f7ff;border:1px solid #c0d8ee;border-radius:8px;padding:10px 16px;text-align:center;min-width:90px">
       <div style="font-size:22px;font-weight:700;color:#1a5fa8">${cases.length}</div><div style="font-size:11px;color:#6c757d">Total Cases</div></div>
@@ -12604,20 +12619,22 @@ function viewDailyReport(branchId){
       <td><span class="bdg ${c.outcome==='transferred'?'ba':'bg'}" style="font-size:10px">${c.outcome==='transferred'?'🚑 Transferred':'✅ Treated'}</span></td>
       <td style="font-size:11px">${(c.payments||[]).map(p=>{const hr=(parseFloat(p.rate)||0)>0;return p.method+' '+(p.amount||'')+(hr?' ('+p.totalEGP+' EGP)':' '+(p.currency||''));}).join('<br>')||c.paymentMethod||'—'}</td>
       <td><span class="bdg ${c.status==='Discharged'?'bgr':'ba'}" style="font-size:10px">${c.status==='Discharged'?'✅ Done':'⏳ Active'}</span></td>
-    </tr>`).join('')||'<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--g500)">No cases today</td></tr>'}</tbody>
+    </tr>`).join('')||`<tr><td colspan="7" style="text-align:center;padding:24px;color:var(--g500)">No cases on ${reportDate}</td></tr>`}</tbody>
   </table></div>
   <div style="background:var(--g50);border-radius:var(--ra);padding:10px 12px;margin-top:8px;font-size:12px">
     <strong>Nationalities:</strong> ${Object.entries(natCount).map(([n,c])=>n+': '+c).join(' · ')||'—'}
   </div>`;
 }
 
-function printDailyReport(branchId){
+function printDailyReport(branchId, dateISO){
   // [Phase A] Defensive branch lock — same isolation rules as viewDailyReport.
   const isMultiBranch = (CU && (CU.role==='admin'||CU.role==='reception'));
   const safeBranch = isMultiBranch ? (branchId||CU.branch) : CU.branch;
   const br=getBr(safeBranch);
   const today=new Date().toISOString().split('T')[0];
-  const cases=getCases().filter(c=>c.branch===safeBranch&&c.kaDate===today&&canView(CU,c));
+  // [Phase B2] dateISO param — backward compatible (defaults to today, validated YYYY-MM-DD ≤ today).
+  const reportDate = (dateISO && /^\d{4}-\d{2}-\d{2}$/.test(dateISO) && dateISO <= today) ? dateISO : today;
+  const cases=getCases().filter(c=>c.branch===safeBranch&&c.kaDate===reportDate&&canView(CU,c));
   const natCount={};cases.forEach(c=>{const n=c.nationality||'Unknown';natCount[n]=(natCount[n]||0)+1;});
   let cashEGP=0,visaCount=0,txCount=0,insCount=0;
   cases.forEach(c=>{
@@ -12637,7 +12654,7 @@ function printDailyReport(branchId){
     if(hasIns) insCount++;
     if(c.outcome==='transferred'||c.transferTo) txCount++;
   });
-  const html=`<!DOCTYPE html><html><head><title>Daily Report ${today}</title>
+  const html=`<!DOCTYPE html><html><head><title>Daily Report ${reportDate}</title>
   <style>body{font-family:Arial,sans-serif;margin:24px;color:#212;font-size:13px}
   table{width:100%;border-collapse:collapse;margin-bottom:14px}
   th{background:#1a5fa8;color:#fff;padding:8px;text-align:left}
@@ -12648,7 +12665,7 @@ function printDailyReport(branchId){
   <div style="display:flex;justify-content:space-between;padding-bottom:12px;border-bottom:3px solid #1a5fa8;margin-bottom:16px">
     <div><div style="font-size:18px;font-weight:700;color:#1a5fa8">HURGHADA MEDICAL CENTER</div>
     <div style="font-size:14px;font-weight:600">${br.name}</div>
-    <div style="font-size:12px;color:#6c757d">Daily Summary — ${today}</div></div>
+    <div style="font-size:12px;color:#6c757d">Daily Summary — ${reportDate}</div></div>
     <div style="text-align:right;font-size:12px;line-height:2">
       <div><b>Prepared by:</b> ${CU.name}</div>
       <div><b>Time:</b> ${new Date().toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})}</div>
