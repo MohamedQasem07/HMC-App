@@ -6485,6 +6485,12 @@ window.dischargeAsExternalTransfer = dischargeAsExternalTransfer;
 
 
 function saveCase(mode='draft'){
+  // [Phase B3] Ref-counted IS_SAVING flag — read by the SW controllerchange
+  // handler to defer reload while a save is mid-flight. Decremented in the
+  // matching `finally` at the end of saveCase so early returns / thrown errors
+  // both clear the flag. No business-logic change to the save body itself.
+  window.IS_SAVING = (window.IS_SAVING|0) + 1;
+  try {
   // CRITICAL FIX: f_id only exists in Tab 1 — use EDIT_ID as fallback for all other tabs
   const id=document.getElementById('f_id')?.value||EDIT_ID||'';
   const cs=getCases();const idx=id?cs.findIndex(x=>x.id===id):-1;
@@ -6782,6 +6788,10 @@ function saveCase(mode='draft'){
     // stays on top (position:fixed) so re-rendering the background page doesn't disturb it.
     if(PAGE==='cases') filterCases();
     else if(PAGE==='dashboard') nav('dashboard');
+  }
+  } finally {
+    // [Phase B3] Always clear the save flag, even on early return / exception.
+    window.IS_SAVING = Math.max(0, (window.IS_SAVING|0) - 1);
   }
 } // end saveCase
 
@@ -16219,6 +16229,9 @@ window.wizQuickAddDischargeMed = wizQuickAddDischargeMed;
 //                    Save / Print
 // ═══════════════════════════════════════════════════════════════════════════
 async function wizSave(options){
+  // [Phase B3] Same ref-counted IS_SAVING wrap as saveCase. See note there.
+  window.IS_SAVING = (window.IS_SAVING|0) + 1;
+  try {
   options = options || {};
   // Validation runs on the INITIAL visit only (visits[0]). Follow-up visits don't need their own complaint/diagnosis.
   const v0 = (RPT_DATA.visits && RPT_DATA.visits[0]) || null;
@@ -16295,6 +16308,10 @@ async function wizSave(options){
       }
     }
   } catch(e){ console.warn('Case modal refresh:', e); }
+  } finally {
+    // [Phase B3] Always clear the save flag, even on early return / exception.
+    window.IS_SAVING = Math.max(0, (window.IS_SAVING|0) - 1);
+  }
 }
 window.wizSave = wizSave;
 
@@ -17524,7 +17541,21 @@ function registerHmcServiceWorker(){
   navigator.serviceWorker.addEventListener('controllerchange', () => {
     if(HMC_SW_RELOADING) return;
     HMC_SW_RELOADING = true;
-    window.location.reload();
+    // [Phase B3] Defer reload while saveCase / wizSave is in flight so a SW
+    // takeover doesn't yank the form out from under the user mid-save. The
+    // ref-counted IS_SAVING flag is set by both save functions inside their
+    // try/finally wrappers — guaranteed to return to 0 even on errors. Hard
+    // 30-second cap so we never stall indefinitely.
+    const startedAt = Date.now();
+    const tryReload = () => {
+      const stuck = (Date.now() - startedAt) > 30000;
+      if((window.IS_SAVING|0) > 0 && !stuck){
+        setTimeout(tryReload, 500);
+      } else {
+        window.location.reload();
+      }
+    };
+    tryReload();
   });
 }
 
