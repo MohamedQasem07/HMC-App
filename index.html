@@ -12558,9 +12558,13 @@ function _tallyDailyRevenue(cases){
 window._tallyDailyRevenue = _tallyDailyRevenue;
 
 function viewDailyReport(branchId){
-  const br=getBr(branchId||CU.branch);
+  // [Phase A] Defensive branch lock — non-admin/reception cannot view another
+  // branch even if branchId is passed in by a manipulated DOM/event handler.
+  const isMultiBranch = (CU && (CU.role==='admin'||CU.role==='reception'));
+  const safeBranch = isMultiBranch ? (branchId||CU.branch) : CU.branch;
+  const br=getBr(safeBranch);
   const today=new Date().toISOString().split('T')[0];
-  const cases=getCases().filter(c=>c.branch===(branchId||CU.branch)&&c.kaDate===today);
+  const cases=getCases().filter(c=>c.branch===safeBranch&&c.kaDate===today&&canView(CU,c));
   const natCount={};cases.forEach(c=>{const n=c.nationality||'Unknown';natCount[n]=(natCount[n]||0)+1;});
   const {cashEGP, visaCount, txCount, insCount} = _tallyDailyRevenue(cases);
   // Open modal FIRST, then populate body
@@ -12598,9 +12602,12 @@ function viewDailyReport(branchId){
 }
 
 function printDailyReport(branchId){
-  const br=getBr(branchId||CU.branch);
+  // [Phase A] Defensive branch lock — same isolation rules as viewDailyReport.
+  const isMultiBranch = (CU && (CU.role==='admin'||CU.role==='reception'));
+  const safeBranch = isMultiBranch ? (branchId||CU.branch) : CU.branch;
+  const br=getBr(safeBranch);
   const today=new Date().toISOString().split('T')[0];
-  const cases=getCases().filter(c=>c.branch===(branchId||CU.branch)&&c.kaDate===today);
+  const cases=getCases().filter(c=>c.branch===safeBranch&&c.kaDate===today&&canView(CU,c));
   const natCount={};cases.forEach(c=>{const n=c.nationality||'Unknown';natCount[n]=(natCount[n]||0)+1;});
   let cashEGP=0,visaCount=0,txCount=0,insCount=0;
   cases.forEach(c=>{
@@ -12697,7 +12704,9 @@ function renderRpts(){
       <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:center">
         <div style="display:flex;gap:6px;align-items:center"><span style="font-size:12px;color:var(--g600)">From</span><input type="date" id="rpt_from" class="fsi" value="${monthStart}" style="width:140px" ${minDate?`min="${minDate}"`:''}  onchange="refreshReport()"></div>
         <div style="display:flex;gap:6px;align-items:center"><span style="font-size:12px;color:var(--g600)">To</span><input type="date" id="rpt_to" class="fsi" value="${today}" style="width:140px" onchange="refreshReport()"></div>
-        <select id="rpt_br" class="fsi" style="width:160px" onchange="refreshReport()"><option value="">All Branches</option>${BRANCHES.map(b=>`<option value="${b.id}">${b.name}</option>`).join('')}</select>
+        ${(CU.role==='admin'||CU.role==='reception')
+          ? `<select id="rpt_br" class="fsi" style="width:160px" onchange="refreshReport()"><option value="">All Branches</option>${BRANCHES.map(b=>`<option value="${b.id}">${b.name}</option>`).join('')}</select>`
+          : `<div class="fsi" style="width:160px;background:var(--g100);padding:9px 12px;border-radius:var(--ra);font-size:13px;color:var(--g600)" title="Locked to your clinic">🔒 ${getBr(CU.branch).name}</div>`}
         ${isAdmin?`<button class="btn bs btn-sm" onclick="setRptQuick('today')">Today</button><button class="btn bs btn-sm" onclick="setRptQuick('week')">This Week</button>`:''}
         <button class="btn bs btn-sm" onclick="setRptQuick('month')">This Month</button>
         ${isAdmin?`<button class="btn bs btn-sm" onclick="setRptQuick('quarter')">Quarter</button><button class="btn bs btn-sm" onclick="setRptQuick('year')">Year</button>`:''}
@@ -12738,20 +12747,27 @@ function refreshReport(){
     const minS=minD.toISOString().split('T')[0];
     if(!from||from<minS) from=minS;
   }
-  const br=document.getElementById('rpt_br')?.value||'';
+  // [Phase A] Defensive branch isolation — non-admin/reception can never see
+  // other branches' data, even if the dropdown DOM is tampered with or rpt_br
+  // is set programmatically. Admin/reception still see all branches by default.
+  const isMultiBranch = (CU.role==='admin'||CU.role==='reception');
+  const br = isMultiBranch ? (document.getElementById('rpt_br')?.value||'') : CU.branch;
   const all=getCases().filter(c=>{
+    if(!canView(CU,c)) return false;
     if(br&&c.branch!==br&&c.treatedAt!==br) return false;
     if(from&&c.kaDate<from) return false;
     if(to&&c.kaDate>to) return false;
     return true;
   });
   const exps=JSON.parse(ls('hmc_expenses')||'[]').filter(e=>{
+    if(!isMultiBranch && e.branch!==CU.branch) return false;
     if(br&&e.branch!==br) return false;
     if(from&&e.date<from) return false;
     if(to&&e.date>to) return false;
     return true;
   });
   const shifts=getShifts().filter(s=>{
+    if(!isMultiBranch && s.branch!==CU.branch) return false;
     if(br&&s.branch!==br) return false;
     const d=s.startTime?s.startTime.split('T')[0]:'';
     if(from&&d<from) return false;
@@ -17406,6 +17422,45 @@ window.addEventListener('DOMContentLoaded',()=>{
 //     onto the new code automatically (controllerchange listener).
 //   • Settings page exposes "Check for updates" + "Clear cache" buttons that
 //     call into this same flow.
+
+// [Phase A] Global error + unhandled-rejection logger.
+// Captures previously-silent JS failures so support can investigate. Persists
+// the last 20 entries to localStorage `hmc_error_log`. Console always logs;
+// no popup is shown to users to avoid interrupting critical flows.
+// Inspect via: window.hmcGetErrorLog()  ·  Clear via: window.hmcClearErrorLog()
+(function(){
+  function persistError(kind, payload){
+    try {
+      const log = JSON.parse(localStorage.getItem('hmc_error_log')||'[]');
+      log.push(Object.assign({
+        kind: kind,
+        ts: new Date().toISOString(),
+        user: (typeof CU!=='undefined' && CU && CU.username) || '',
+        url: location.href,
+      }, payload||{}));
+      localStorage.setItem('hmc_error_log', JSON.stringify(log.slice(-20)));
+    } catch(_){}
+  }
+  window.addEventListener('error', function(e){
+    try { console.error('[HMC error]', e.message, '@', e.filename, ':', e.lineno, (e.error && e.error.stack)||''); } catch(_){}
+    persistError('error', {
+      msg: (e.message||'').slice(0,300),
+      file: (e.filename||'').slice(0,200),
+      line: e.lineno||0,
+      stack: ((e.error && e.error.stack)||'').slice(0,500),
+    });
+  });
+  window.addEventListener('unhandledrejection', function(e){
+    const reason = (e.reason && (e.reason.message || String(e.reason))) || 'unknown';
+    try { console.error('[HMC unhandledrejection]', reason, (e.reason && e.reason.stack)||''); } catch(_){}
+    persistError('promise', {
+      msg: String(reason).slice(0,300),
+      stack: ((e.reason && e.reason.stack)||'').slice(0,500),
+    });
+  });
+  window.hmcGetErrorLog = function(){ try { return JSON.parse(localStorage.getItem('hmc_error_log')||'[]'); } catch(_){ return []; } };
+  window.hmcClearErrorLog = function(){ try { localStorage.removeItem('hmc_error_log'); } catch(_){} };
+})();
 
 let HMC_SW_REGISTRATION = null;
 let HMC_SW_WAITING = null;
