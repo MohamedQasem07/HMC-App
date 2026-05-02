@@ -264,13 +264,25 @@ select.fsi{cursor:pointer}textarea.fsi{resize:vertical;min-height:68px}
 
 /* Tablet adjustments */
 /* Tablet — Phase 1: aligned to spec mobile<=767 / tablet=768-1023 / desktop>=1024 */
+/* [Phase 3] Sidebar widened from 60→200px so the nav labels stay readable
+   (was icon-only without tooltips, hard to use on iPad). Removed the dead
+   `.sb-item .sb-label{display:none}` rule — the actual DOM uses `.ni-en/.ni-ar`.
+   Also removed the `.main{margin-left}` override: `.app` is flex-row and `.main`
+   has flex:1, so it sizes to the remaining width automatically. The old
+   margin-left:60px was wasting 60px of screen as an empty gap. */
 @media(min-width:768px) and (max-width:1023px){
-  .sb{width:60px!important;overflow:hidden}
-  .sb-item .sb-label{display:none!important}
-  .main{margin-left:60px!important}
+  .sb{width:200px!important;overflow:visible}
   .modal{max-width:95vw!important}
   table{font-size:11px}
   .wiz-tab{font-size:11px!important;padding:8px 10px!important}
+}
+
+/* [Phase 3] Desktop ≥1280: bump default modal max-width so the case modal
+   and other 820-capped dialogs use more screen real estate. Wizard/NS already
+   override to 1300px via specific selectors above. Mobile/tablet still capped
+   via the rules above (95vw on tablet, 100% on mobile). */
+@media (min-width: 1280px){
+  .modal{max-width:1100px}
 }
 
 /* Touch-friendly sizes */
@@ -13980,18 +13992,28 @@ function deleteInsCo(id){
 function renderSettings(){
   if(CU.role!=='admin') return`<div style="text-align:center;padding:60px;color:var(--g500)"><div style="font-size:40px;margin-bottom:12px">🔒</div>Admin access required</div>`;
   // [Session #7 PWA] App version + update controls
+  // [Phase 4] Added Install button (beforeinstallprompt) + per-platform instructions.
   const swSupported = ('serviceWorker' in navigator);
   const isInstalled = window.matchMedia('(display-mode: standalone)').matches || (window.navigator.standalone===true);
+  const canInstall = !!HMC_INSTALL_PROMPT;  // truthy only on Chrome/Edge/Android after the event fired
   return`<div style="margin-bottom:14px" class="card">
     <div class="ch"><div class="ct">📱 App Updates — تحديثات البرنامج</div><span style="font-size:12px;color:var(--g500)">${isInstalled?'<span style="color:var(--gr)">✓ Installed as app</span>':'Browser tab'}</span></div>
     <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
-      <button class="btn bp" onclick="hmcCheckForUpdates()" ${!swSupported?'disabled':''}>🔄 Check for Updates Now — تحقّق من التحديثات</button>
+      ${canInstall?`<button class="btn bp" onclick="hmcTriggerInstall()">📲 Install App — ثبت على الجهاز</button>`:''}
+      <button class="btn ${canInstall?'bs':'bp'}" onclick="hmcCheckForUpdates()" ${!swSupported?'disabled':''}>🔄 Check for Updates Now — تحقّق من التحديثات</button>
       <button class="btn bs" onclick="hmcClearCache()">🗑️ Clear App Cache — مسح ذاكرة التطبيق</button>
     </div>
     <div style="margin-top:10px;font-size:12px;color:var(--g600)">
       ${swSupported?'✅ Service Worker supported':'⚠️ Service Worker not supported in this browser'}
-      ${!isInstalled?'<div style="margin-top:6px;padding:8px;background:var(--pf);border-radius:6px;font-size:11px">💡 <strong>Install on phone:</strong> iOS Safari → Share → "Add to Home Screen". Android Chrome → menu (⋮) → "Install app".</div>':''}
     </div>
+    ${!isInstalled?`<div style="margin-top:12px;padding:12px;background:var(--pf);border-radius:8px;border:1px solid #c0d8ee">
+      <div style="font-weight:600;font-size:13px;margin-bottom:8px;color:var(--pd)">📲 How to install — كيفية التثبيت</div>
+      <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px;font-size:12px;color:var(--g700)">
+        <div><strong>🍎 iPhone (Safari)</strong><ol style="margin:4px 0 0 18px;padding:0;line-height:1.5"><li>Tap the Share button ⬆️</li><li>Choose <strong>Add to Home Screen</strong></li><li>Tap <strong>Add</strong></li></ol></div>
+        <div><strong>🤖 Android (Chrome)</strong><ol style="margin:4px 0 0 18px;padding:0;line-height:1.5"><li>${canInstall?'Tap <strong>📲 Install App</strong> above':'Tap menu (⋮) → <strong>Install app</strong>'}</li><li>Confirm <strong>Install</strong></li></ol></div>
+        <div><strong>💻 Desktop (Chrome/Edge)</strong><ol style="margin:4px 0 0 18px;padding:0;line-height:1.5"><li>${canInstall?'Click <strong>📲 Install App</strong> above':'Click the install icon ⊕ in the address bar'}</li><li>Confirm <strong>Install</strong></li></ol></div>
+      </div>
+    </div>`:''}
   </div>
   <div style="margin-bottom:14px" class="card">
     <div class="ch"><div class="ct">☁️ Supabase Sync</div><span id="syncStatus" style="font-size:12px;color:var(--g500)">Checking...</span></div>
@@ -17388,6 +17410,40 @@ window.addEventListener('DOMContentLoaded',()=>{
 let HMC_SW_REGISTRATION = null;
 let HMC_SW_WAITING = null;
 let HMC_SW_RELOADING = false;
+
+// [Phase 4] PWA install prompt — capture the browser-native event so the user
+// can install via a button inside Settings (instead of digging through browser
+// menus). Fires on Chrome/Edge/Android; iOS Safari does NOT fire this event,
+// which is why we keep the "Add to Home Screen" instructions for iPhone users.
+let HMC_INSTALL_PROMPT = null;
+window.addEventListener('beforeinstallprompt', function(e){
+  e.preventDefault();
+  HMC_INSTALL_PROMPT = e;
+  // Soft re-render Settings if it's open so the Install button appears.
+  if(typeof PAGE!=='undefined' && PAGE==='settings' && typeof nav==='function') nav('settings');
+});
+window.addEventListener('appinstalled', function(){
+  HMC_INSTALL_PROMPT = null;
+  if(typeof toast==='function') toast('✅ تم التثبيت — App installed','ok');
+  if(typeof PAGE!=='undefined' && PAGE==='settings' && typeof nav==='function') nav('settings');
+});
+async function hmcTriggerInstall(){
+  if(!HMC_INSTALL_PROMPT){
+    if(typeof toast==='function') toast('Install not available — use browser menu','warn');
+    return;
+  }
+  try {
+    HMC_INSTALL_PROMPT.prompt();
+    const choice = await HMC_INSTALL_PROMPT.userChoice;
+    if(choice && choice.outcome === 'accepted'){
+      if(typeof toast==='function') toast('🎉 Installing app...','ok');
+    }
+  } catch(e){
+    if(typeof toast==='function') toast('Install failed: '+(e.message||''),'err');
+  }
+  HMC_INSTALL_PROMPT = null;
+}
+window.hmcTriggerInstall = hmcTriggerInstall;
 
 function registerHmcServiceWorker(){
   if(!('serviceWorker' in navigator)) return;

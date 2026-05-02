@@ -24,5 +24,21 @@
       "purpose": "maskable"
     }
   ],
-  "categories": ["medical", "productivity", "business"]
+  "categories": ["medical", "productivity", "business"],
+  "screenshots": [
+    {
+      "src": "screenshot-desktop.png",
+      "sizes": "1280x800",
+      "type": "image/png",
+      "form_factor": "wide",
+      "label": "HMC Dashboard on desktop"
+    },
+    {
+      "src": "screenshot-mobile.png",
+      "sizes": "430x932",
+      "type": "image/png",
+      "form_factor": "narrow",
+      "label": "HMC on mobile"
+    }
+  ]
 }
