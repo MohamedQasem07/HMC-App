@@ -11669,9 +11669,12 @@ function renderTreasury(){
     const curr = r.originalCurrency||r.currency||'EUR';
     if(!pending[curr]) pending[curr]={Cash:0,Visa:0,Digital:0,total:0};
     if(r.method==='Cash'){
-      // Cash stored in its original currency (or EGP if rate applied)
-      const cashCurr=r.egp>0?'EGP':curr;
-      const cashAmt=r.egp>0?r.egp:r.amount;
+      // [Phase C2] Cash always stays in its original currency. Physical money
+      // doesn't change currency just because a rate was entered. The EGP
+      // equivalent (r.egp) is shown only as an informational subtitle on the
+      // foreign-currency cash card.
+      const cashCurr = r.originalCurrency || curr;
+      const cashAmt  = (typeof r.originalAmount==='number' ? r.originalAmount : r.amount) || 0;
       if(!pending[cashCurr]) pending[cashCurr]={Cash:0,Visa:0,Digital:0,total:0};
       pending[cashCurr].Cash+=cashAmt; pending[cashCurr].total+=cashAmt;
     } else if(r.method==='Visa'){
@@ -11690,7 +11693,15 @@ function renderTreasury(){
     const hoTime = new Date(lastHandover.datetime || lastHandover.date+'T23:59:59');
     return expTime > hoTime;
   });
-  const expByEGP = pendingExp.filter(e=>e.currency==='EGP').reduce((s,e)=>s+(parseFloat(e.amount)||0),0);
+  // [Phase C2] Group pending expenses by their own currency so each cash
+  // card's net reduces by its matching-currency expenses. Foreign expenses
+  // (EUR / USD / GBP) are no longer silently dropped from the cash net.
+  const expByCurr = {};
+  pendingExp.forEach(e => {
+    const ec = e.currency || 'EGP';
+    expByCurr[ec] = (expByCurr[ec]||0) + (parseFloat(e.amount)||0);
+  });
+  const expByEGP = expByCurr['EGP']||0;  // legacy alias kept for backward compatibility
 
   // Income counts
   const cashCount = pendingRows.filter(r=>r.method==='Cash').length;
@@ -11706,17 +11717,29 @@ function renderTreasury(){
 
   const cashCards = CURRENCIES.map(curr=>{
     const cashAmt = pending[curr]?.Cash||0;
-    const count = cashRows.filter(r=>r.currency===curr).length;
-    const net = curr==='EGP' ? cashAmt-expByEGP : cashAmt;
+    // [Phase C2] Match by originalCurrency (where preserved) OR currency, since
+    // Cash rows now always stay in original currency.
+    const count = cashRows.filter(r=>(r.originalCurrency||r.currency)===curr).length;
+    // [Phase C2] EGP-equivalent for foreign-currency cash cards (info subtitle).
+    // Sum the saved totalEGP across cash payments in this currency that had
+    // a rate entered. Hidden when 0 or when this card IS the EGP card.
+    const egpEquiv = pendingRows
+      .filter(r => r.method==='Cash' && (r.originalCurrency||r.currency)===curr && (parseFloat(r.egp)||0)>0)
+      .reduce((s,r)=>s+(parseFloat(r.egp)||0), 0);
+    // [Phase C2] Per-currency expense reduction. Each card nets out its own
+    // currency's expenses (foreign expenses no longer silently dropped).
+    const expForCurr = expByCurr[curr]||0;
+    const net = cashAmt - expForCurr;
     return `<div style="background:#fff;border-radius:var(--ra);border:1px solid var(--g200);padding:14px 16px;border-top:3px solid var(--gr)">
       <div style="display:flex;justify-content:space-between;align-items:flex-start;margin-bottom:6px">
         <div style="font-size:11px;font-weight:700;color:var(--g500);text-transform:uppercase">💵 Cash ${curr}</div>
         <div style="font-size:10px;color:var(--g400)">${count} tx</div>
       </div>
-      <div style="font-size:22px;font-weight:700;color:${cashAmt>0?'var(--gr)':'var(--g400)'};margin-bottom:6px">${cashAmt.toLocaleString()}</div>
-      ${curr==='EGP'?`<div style="border-top:1px solid var(--g200);padding-top:5px">
-        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--red)"><span>Expenses</span><span>-${expByEGP.toLocaleString()}</span></div>
-        <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:${net>=0?'var(--gr)':'var(--red)'}"><span>Net</span><span>${net.toLocaleString()} EGP</span></div>
+      <div style="font-size:22px;font-weight:700;color:${cashAmt>0?'var(--gr)':'var(--g400)'};margin-bottom:4px">${cashAmt.toLocaleString()}</div>
+      ${egpEquiv>0 && curr!=='EGP'?`<div style="font-size:11px;color:var(--g500);margin-bottom:6px">≈ ${egpEquiv.toLocaleString()} EGP equivalent</div>`:''}
+      ${(expForCurr>0 || curr==='EGP')?`<div style="border-top:1px solid var(--g200);padding-top:5px;margin-top:5px">
+        <div style="display:flex;justify-content:space-between;font-size:11px;color:var(--red)"><span>Expenses</span><span>-${expForCurr.toLocaleString()}</span></div>
+        <div style="display:flex;justify-content:space-between;font-size:12px;font-weight:700;color:${net>=0?'var(--gr)':'var(--red)'}"><span>Net</span><span>${net.toLocaleString()} ${curr}</span></div>
       </div>`:`<div style="font-size:11px;color:var(--g500)">Cash only · to hand over physically</div>`}
     </div>`;
   }).join('');
@@ -12308,13 +12331,11 @@ function calcPendingCash(branch){
       const hasRate=(parseFloat(p.rate)||0)>0&&(parseFloat(p.totalEGP)||0)>0;
 
       if(p.method==='Cash'){
-        // Cash: use original currency. If rate+totalEGP → store as EGP
-        if(hasRate){
-          cash.EGP=(cash.EGP||0)+(parseFloat(p.totalEGP)||0);
-        } else {
-          const curr=p.currency||'EUR';
-          cash[curr]=(cash[curr]||0)+amt;
-        }
+        // [Phase C2] Cash always stays in its original currency. The EGP
+        // equivalent (totalEGP from rate × amount) is informational only —
+        // physical-handover counts use the original currency denominations.
+        const curr=p.currency||'EUR';
+        cash[curr]=(cash[curr]||0)+amt;
       } else if(p.method==='Visa'){
         // Visa machine charges EGP → use totalEGP (amt × rate)
         // If no rate entered, use amt as EGP directly
