@@ -10328,6 +10328,14 @@ async function printFullFile(caseId){
     </div>`;
   const curr=c.currency||'EUR';
   const total=c.invoiceAmount||0;
+  // [Phase B1c] Role-based invoice gate. For insurance cases, only admin /
+  // reception see the invoice in the combined Full File. Nurse / manager get
+  // attachments + medical report only — that's what they send to the insurance
+  // company. Cash / free / self-pay cases keep current behavior (visible to all
+  // roles when total > 0).
+  const _isInsCase=isInsuranceCase(c)||(c.payments||[]).some(p=>p.method==='Insurance');
+  const _isElevatedRole=(typeof CU!=='undefined'&&CU&&(CU.role==='admin'||CU.role==='reception'));
+  const includeInvoice=!_isInsCase||_isElevatedRole;
 
   // Payments section
   const payRows=(c.payments||[]).filter(p=>p.method&&(p.amount>0||p.method==='Free')).map(p=>{
@@ -10406,11 +10414,17 @@ async function printFullFile(caseId){
 
   // ── Attachments: files only (no cover page) ──
   const files=c.files||[];
+  // [Phase B1c] HTTPS URLs (Supabase Storage public bucket `case-attachments`)
+  // pass through unchanged — verified via CORS smoke test that the bucket
+  // serves `Access-Control-Allow-Origin: *`. <img> renders the URL directly,
+  // PDF.js fetches the binary cross-origin successfully. Legacy base64
+  // `data:` URLs still go through the in-memory Blob conversion below.
   function makeBlobUrl(f){
     if(!f||!f.url) return null;
     try{
       var raw=f.url;
       try{raw=decodeURIComponent(raw);}catch(e){}
+      if(raw.startsWith('http://')||raw.startsWith('https://')) return raw;
       if(!raw.startsWith('data:')) return null;
       var parts=raw.split(',');
       var mime=f.type||((parts[0].match(/:(.*?);/)||[])[1])||'application/octet-stream';
@@ -10515,11 +10529,10 @@ async function printFullFile(caseId){
   ${rptSection}
 
   <!-- Invoice THIRD — full invoice via shared buildInvoiceBodyHTML helper [Phase B1b] -->
-  <!-- Replaces the legacy summary block. Reads opts from saved case fields
-       (saveInvToCase persists discount, excess, exRate, transferBank, transferCurrency).
-       inv_type is not persisted, defaults to Final Invoice. The helper provides
-       its own clinic header so the surrounding invHeader wrap is no longer needed. -->
-  ${total>0?`
+  <!-- [Phase B1c] Gated by includeInvoice — insurance cases hide invoice from
+       non-admin/reception roles (nurses send attachments + MR to insurance,
+       not the invoice). Cash/free/self-pay keep existing behavior. -->
+  ${(includeInvoice&&total>0)?`
   <div style="page-break-before:always;"></div>
   ${(function(){
     const opts = {
