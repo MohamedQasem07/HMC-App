@@ -6957,17 +6957,22 @@ window.INS_ENTRY_TYPES = INS_ENTRY_TYPES;
 async function openInsWorkspace(caseId){
   const c = getCases().find(x => x.id===caseId);
   if(!c){ toast('Case not found','err'); return; }
-  // Ensure modal element exists
+  // [InsWS Fix] Outer element uses the project's standard `.mbd` backdrop
+  // class so it renders as a fixed-position fullscreen overlay (z-index:1000,
+  // align-items:center, justify-content:center). The `.mbd.open` rule from
+  // line 215–216 toggles display:flex. The inner .modal-content div keeps its
+  // own max-width/max-height so it renders as a centered card on top of the
+  // dimmed backdrop. Was previously rendering at the bottom of the body
+  // (position:static) and invisible to the user.
   let m = document.getElementById('insWorkspaceModal');
   if(!m){
     m = document.createElement('div');
     m.id = 'insWorkspaceModal';
-    m.className = 'modal';
-    m.style.display = 'none';
+    m.className = 'mbd';
     document.body.appendChild(m);
   }
   m.innerHTML = '<div class="modal-content" style="max-width:1100px;max-height:92vh;overflow-y:auto"><div style="padding:24px;text-align:center;color:var(--g500)">⏳ Loading case timeline...</div></div>';
-  m.style.display = 'flex';
+  m.classList.add('open');
   // Pull fresh timeline + IC contact in parallel
   await Promise.all([
     loadInsLogForCase(caseId),
@@ -6978,8 +6983,10 @@ async function openInsWorkspace(caseId){
 window.openInsWorkspace = openInsWorkspace;
 
 function closeInsWorkspace(){
+  // [InsWS Fix] Hide via the standard .mbd.open class toggle, then clear
+  // innerHTML. Pairs with the openInsWorkspace fix above.
   const m = document.getElementById('insWorkspaceModal');
-  if(m){ m.style.display='none'; m.innerHTML=''; }
+  if(m){ m.classList.remove('open'); m.innerHTML=''; }
 }
 window.closeInsWorkspace = closeInsWorkspace;
 
