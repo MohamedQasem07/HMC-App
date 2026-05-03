@@ -3021,7 +3021,12 @@ function saveCases(d) {
   var lean=d.map(function(c){
     if(!c.files||!c.files.length) return c;
     return Object.assign({},c,{files:c.files.map(function(f){
-      const keepUrl=f.url && f.url.length<2000 ? f.url : '';
+      // [Phase C3.1 Hotfix-2] Always preserve HTTP(S) Supabase Storage URLs —
+      // they're short and re-fetchable. Only strip long base64 data: URIs to
+      // protect localStorage quota. Empty/missing URLs stay empty (no fabrication).
+      var url=f.url||'';
+      var isHttp=url.startsWith('http://')||url.startsWith('https://');
+      var keepUrl=isHttp?url:(url.length<2000?url:'');
       return {name:f.name,type:f.type||'',size:f.size||0,url:keepUrl};
     })});
   });
@@ -6600,18 +6605,31 @@ function saveCase(mode='draft'){
     if(!txDest && mode==='close'){toast('⚠️ Select a transfer destination — اختر وجهة التحويل','err');return;}
   }
 
-  // Collect files from DOM fileList
+  // [Phase C3.1 Hotfix-1] DOM file list IS the source of truth.
+  // Each visible row maps to one persisted file. Deletes propagate immediately
+  // because the deleted DOM row is no longer in domFiles and won't be re-added.
+  // Defensive merge with existing.files preserves fields not present in the DOM
+  // (e.g. size from upload; legacy url across tab re-renders that may have lost
+  //  data-url) when the row's name matches.
   const existingFiles=existing.files||[];
+  const existingByName=Object.fromEntries(existingFiles.map(f=>[f.name,f]));
   const domFiles=Array.from(document.querySelectorAll('#fileList .fit')).map(div=>{
     const dataEl=div.querySelector('.fit-data');
     const nameEl=div.querySelector('.fit-nm');
     if(!dataEl||!nameEl) return null;
     var rawUrl=dataEl.dataset.url||'';try{rawUrl=decodeURIComponent(rawUrl);}catch(e){}
-    return{name:nameEl.textContent,type:dataEl.dataset.type||'',url:rawUrl};
+    const name=nameEl.textContent;
+    const ex=existingByName[name]||{};
+    return{
+      name,
+      type:dataEl.dataset.type||ex.type||'',
+      size:ex.size||0,
+      // Prefer just-rendered DOM url; fall back to existing url so legacy rows
+      // (where data-url got cleared by re-render) don't lose their Storage URL.
+      url:rawUrl||ex.url||''
+    };
   }).filter(Boolean);
-  const existingNames=new Set(existingFiles.map(f=>f.name));
-  const newFiles=domFiles.filter(f=>!existingNames.has(f.name));
-  const allFiles=[...existingFiles,...newFiles];
+  const allFiles=domFiles; // DOM is authoritative — deletes win.
 
   // Collect excess pay rows
   const excessPayRows=Array.from(document.querySelectorAll('#excessPayRows .pr')).map(r=>{
@@ -10303,9 +10321,14 @@ async function printFullFile(caseId){
 
   const c=getCases().find(x=>x.id===caseId);
   if(!c){try{w.close();}catch(e){}toast('Case not found','err');return;}
-  // Load full files (with data URLs) from IndexedDB
-  const idbFiles=await idbGetFiles(caseId);
-  if(idbFiles&&idbFiles.length) c.files=idbFiles;
+  // [Phase C3.1 Hotfix-5] IDB override DISABLED. The saved case.files metadata
+  // is now authoritative — pulling from IndexedDB here can resurrect deleted
+  // attachments from a stale snapshot. With Hotfix-2 keeping HTTPS URLs in
+  // c.files, the canonical localStorage/Supabase metadata is sufficient.
+  // (idbGetFiles is still used by initCaseTabElements + closed-case view as a
+  //  fallback when c.files is empty — those paths remain unchanged.)
+  // const idbFiles=await idbGetFiles(caseId);
+  // if(idbFiles&&idbFiles.length) c.files=idbFiles;
   const r=c.medicalReport||{};
   const logoChoice=c.facility==='SMC'?'sahl':'hmc';
   const isSahl=logoChoice==='sahl';
@@ -10437,9 +10460,22 @@ async function printFullFile(caseId){
   const fileBlobUrls=files.map(makeBlobUrl);
   const hasPdfs=files.some(function(f){return !f.type?.startsWith('image/')&&(f.type==='application/pdf'||f.name.toLowerCase().endsWith('.pdf'));});
 
+  // [Phase C3.1 Hotfix-3] If a file has no usable URL (failed upload, stripped
+  // legacy entry, etc.), render a clear placeholder page identifying the
+  // filename — never silently omit. The user can then re-upload to recover.
+  function _missingUrlPlaceholder(f, fi, isPdf){
+    const icon=isPdf?'📄':'🖼️';
+    const kind=isPdf?'PDF':'Image';
+    return '<div style="'+(fi===0?'':'page-break-before:always;')+'border:2px dashed #b0b0b0;background:#fafafa;padding:40px 24px;text-align:center;color:#555;margin:0">'
+      +'<div style="font-size:36px;margin-bottom:12px">'+icon+'</div>'
+      +'<div style="font-size:15px;font-weight:700;color:#333;margin-bottom:6px">Uploaded file unavailable: '+(f.name||'(unnamed)')+'</div>'
+      +'<div style="font-size:11px;color:#777">Please re-upload this attachment ('+kind+').</div>'
+      +'</div>';
+  }
   // Images: each on its own page
   const imgSection=files.map(function(f,fi){
-    if(!(f.type&&f.type.startsWith('image/'))||!fileBlobUrls[fi]) return '';
+    if(!(f.type&&f.type.startsWith('image/'))) return '';
+    if(!fileBlobUrls[fi]) return _missingUrlPlaceholder(f,fi,false);
     return '<div style="'+(fi===0?'':'page-break-before:always;')+'text-align:center;margin:0;padding:0">'
       +'<img src="'+fileBlobUrls[fi]+'" style="max-width:100%;max-height:95vh;object-fit:contain;display:block;margin:auto">'
       +'</div>';
@@ -10449,7 +10485,8 @@ async function printFullFile(caseId){
   const pdfSection=files.map(function(f,fi){
     var isImg=f.type&&f.type.startsWith('image/');
     var isPdf=!isImg&&(f.type==='application/pdf'||f.name.toLowerCase().endsWith('.pdf'));
-    if(!isPdf||!fileBlobUrls[fi]) return '';
+    if(!isPdf) return '';
+    if(!fileBlobUrls[fi]) return _missingUrlPlaceholder(f,fi,true);
     return '<div id="pdf_canvas_'+fi+'" class="pdf-canvas-box" data-url="'+fileBlobUrls[fi]+'" data-idx="'+fi+'"></div>';
   }).join('');
 
@@ -10578,9 +10615,28 @@ async function printFullFile(caseId){
   <!-- Gated by includeInvoice (same role/insurance rule as the invoice itself):
        insurance + nurse/manager → hidden; admin/reception or cash → visible. -->
   ${includeInvoice?(()=>{
-    const labInvItem=(c.invoiceItems||[]).find(it=>it._type==='labs');
-    const labItems=labInvItem?.labItems||[];
-    if(!labItems.length) return '';
+    // [Phase C3.1 Hotfix-4] Detect labs by *presence* of labItems[] (the data),
+    // OR by the HMC-LAB-PKG package code, OR by legacy _type==='labs'. Real cases
+    // sometimes store the package as _type='medical' with labItems[] as metadata.
+    const labInvItem=(c.invoiceItems||[]).find(it=>
+      it._type==='labs' ||
+      it.code==='HMC-LAB-PKG' ||
+      (Array.isArray(it.labItems)&&it.labItems.length>0)
+    );
+    if(!labInvItem) return '';
+    const labItems=labInvItem.labItems||[];
+    // [Phase C3.1 Hotfix-4] Empty-labItems placeholder — never silently omit
+    // when an invoice line says "Laboratory Investigations — Breakdown Attached".
+    if(!labItems.length){
+      return `<div style="page-break-before:always;"></div>
+      ${invHeader}
+      <div style="text-align:center;font-size:14px;font-weight:700;color:#1B3A5C;margin-bottom:14px;border-bottom:2px solid #1B3A5C;padding-bottom:6px">LABORATORY INVESTIGATIONS BREAKDOWN</div>
+      <div style="background:#fff7e6;border:1.5px solid #ffd699;border-radius:6px;padding:18px;text-align:center;color:#8b5a00;margin-bottom:12px">
+        <div style="font-size:14px;font-weight:600;margin-bottom:6px">Laboratory breakdown details are not configured for this invoice.</div>
+        <div style="font-size:11px">Invoice line: <strong>${labInvItem.desc||labInvItem.code||'Lab Package'}</strong> &middot; ${(parseFloat(labInvItem.total)||0).toFixed(2)} ${curr}</div>
+        <div style="font-size:10px;margin-top:8px;color:#aaa">Tip: regenerate the invoice from Nursing Sheet → Invoice Builder to attach individual tests.</div>
+      </div>`;
+    }
     // Items can be shape {test,qty,unit} (from manual labs modal) OR {name,price} (from NS-generated invoice)
     const norm=labItems.map(it=>({
       name:it.test||it.name||it.desc||'—',
