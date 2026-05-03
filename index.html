@@ -7000,7 +7000,10 @@ function renderInsWorkspaceContent(caseId){
   const statusBadge = `<span class="bdg ${getCaseStatusColor(c.caseStatus)}" style="font-size:12px">${c.caseStatus||'No GOP'}</span>`;
   const fac = (typeof getCaseFacility==='function') ? getCaseFacility(c) : 'HMC';
   const html = `
-    <div class="modal-content" style="max-width:1100px;max-height:92vh;overflow-y:auto;padding:0">
+    <!-- [InsWS Buttons Fix] background:#fff + border-radius:8px on outer card so the
+         modal renders as a solid white card instead of showing the dimmed backdrop
+         through it (.modal-content has no desktop CSS rules). -->
+    <div class="modal-content" style="max-width:1100px;max-height:92vh;overflow-y:auto;padding:0;background:#fff;border-radius:8px">
       <!-- Header -->
       <div style="background:linear-gradient(135deg,#0b2d52,var(--p));color:#fff;padding:16px 22px;border-radius:8px 8px 0 0;display:flex;justify-content:space-between;align-items:flex-start">
         <div>
@@ -7019,11 +7022,13 @@ function renderInsWorkspaceContent(caseId){
         </div>
       </div>
 
-      <!-- Quick action bar -->
+      <!-- [InsWS Buttons Fix] Quick action bar simplified:
+           - "🖨️ Print Invoice" removed (was routing to combined Patient File via finalizeInsurance);
+             official invoice print is reachable via Edit Invoice → Invoice Builder → 🖨️ Preview & Print.
+           - "📁 Full File PDF" removed (duplicate; no per-case file action belongs in this workspace).
+           - "Open Full Case" kept unchanged (intentionally opens the 5-step case form). -->
       <div style="background:#f5f6f8;padding:8px 22px;border-bottom:1px solid var(--g200);display:flex;gap:6px;flex-wrap:wrap">
         <button class="btn bs btn-sm" onclick="openCaseModal('${caseId}');closeInsWorkspace()">📋 Open Full Case</button>
-        <button class="btn bs btn-sm" onclick="finalizeInsurance('${caseId}')">🖨️ Print Invoice</button>
-        <button class="btn bs btn-sm" onclick="printFullFile('${caseId}')">📁 Full File PDF</button>
       </div>
 
       <!-- Section A: Medical Report -->
@@ -7076,7 +7081,11 @@ function _renderInsWS_SectionB(c){
   return `<div style="padding:14px 22px;border-bottom:1px solid var(--g200)">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
       <div style="font-size:13px;font-weight:700;color:var(--p)">💰 B · Invoice & Bank</div>
-      <button class="btn bs btn-sm" onclick="openCaseModal('${c.id}');closeInsWorkspace()">✏️ Edit Invoice</button>
+      <!-- [InsWS Buttons Fix] Was openCaseModal (5-step case wizard); now opens
+           the actual Invoice Builder for this case via openInvModal — same path
+           used by all other "Invoice Builder" entry points (lines 5,839 / 5,969 /
+           7,707). -->
+      <button class="btn bs btn-sm" onclick="openInvModal('${c.id}');closeInsWorkspace()">✏️ Edit Invoice</button>
     </div>
     <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;font-size:12px">
       <div style="background:var(--g50);padding:10px;border-radius:6px">
