@@ -983,6 +983,84 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
 }
 
 /* ════════════════════════════════════════════════════════════════════════
+   [Phase M2] Mobile Visual Layout Fixes — CSS only · No JS · No HTML.
+   Resolves four real-mobile defects reported at 390px:
+   - M2-1: Cases page top branch selector clipped/circular
+   - M2-2: Insurance Mgmt blue card buttons overflow
+   - M2-3: Insurance Companies Add form fields/buttons overlap
+   - M2-4: New Case Wizard date/time row overflow (no-space grid selector)
+   ════════════════════════════════════════════════════════════════════════ */
+@media (max-width: 767px){
+  /* [Phase M2-1] Cases / Insurance Mgmt search bar — neutralize the inline
+     `style="width:165px"` etc. on .sbar selects so the existing line 782
+     rule (.sbar .fsi { flex: 1 1 calc(50% - 3px); min-width: 0 }) takes
+     effect. Was clipped/rounded because inline width forced shrink past
+     the rendering threshold. */
+  .sbar input.fsi[style*="width:"],
+  .sbar select.fsi[style*="width:"],
+  .sbar div.fsi[style*="width:"]{
+    width: auto !important;
+    flex: 1 1 calc(50% - 3px) !important;
+    min-width: 0 !important;
+  }
+
+  /* [Phase M2-2] Insurance Mgmt blue summary card — the action button row
+     (Reports / Export CSV / Print Index) sits in `display:flex;gap:8px`
+     with `white-space:nowrap` on .btn, which overflows the card right
+     edge. Allow the parent space-between flex to wrap, and shrink the
+     button row to 50/50 or full-width as needed. */
+  div[style*="display:flex"][style*="justify-content:space-between"]{
+    flex-wrap: wrap !important;
+    gap: 10px !important;
+  }
+  div[style*="display:flex;gap:8px"] > .btn,
+  div[style*="display:flex;gap:8px"] > .btn-sm{
+    flex: 1 1 auto !important;
+    white-space: normal !important;
+    font-size: 11.5px !important;
+    padding: 5px 8px !important;
+    min-height: 36px;
+  }
+
+  /* [Phase M2-3] Insurance Companies Add form — 5 fields + Save button
+     in a single flex-wrap row had inline `min-width:130/150/180px` which
+     summed past viewport, causing fields to stack with overlap. Reset
+     min-width and force a clean 2-up grid on mobile; Save button takes
+     its own full-width row at the end. */
+  .card div[style*="display:flex"][style*="flex-wrap:wrap"] > .fsg{
+    min-width: 0 !important;
+    flex-basis: calc(50% - 4px) !important;
+  }
+  .card div[style*="display:flex"] > .fsg[style*="width:130px"],
+  .card div[style*="display:flex"] > .fsg[style*="width:150px"],
+  .card div[style*="display:flex"] > .fsg[style*="width:180px"]{
+    width: auto !important;
+    flex-basis: calc(50% - 4px) !important;
+  }
+  .card div[style*="display:flex"][style*="flex-wrap:wrap"] > button.btn{
+    flex-basis: 100% !important;
+    margin-top: 8px;
+  }
+
+  /* [Phase M2-4] Inline `grid-template-columns` shorthand WITHOUT space
+     after the colon. Existing line 449–464 selectors require a space
+     after the colon, so render functions that emit minified inline CSS
+     (e.g. renderCaseTab1 line 5567) escape the collapse-to-1-col rule.
+     This adds the no-space variants. */
+  [style*="grid-template-columns:1fr 1fr 1fr 1fr"],
+  [style*="grid-template-columns:1fr 1fr 1fr"],
+  [style*="grid-template-columns:1fr 1fr"],
+  [style*="grid-template-columns:repeat("]{
+    grid-template-columns: 1fr !important;
+  }
+  /* Date/time inputs — 40px tap target + 100% width for readability. */
+  input[type="date"], input[type="time"], input[type="datetime-local"]{
+    min-height: 40px;
+    width: 100% !important;
+  }
+}
+
+/* ════════════════════════════════════════════════════════════════════════
    [Session #7 Phase D] Mobile menu button + bottom-sheet polish
    ════════════════════════════════════════════════════════════════════════ */
 
