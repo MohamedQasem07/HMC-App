@@ -5911,9 +5911,10 @@ function renderTab3Insurance(c,isAdmin,caseStatusOpts){
   const _files=(c?.files||[]);
   const insAttachments=`
   <div style="background:#fff;border:1.5px dashed var(--p);border-radius:var(--ra);padding:12px;margin-bottom:12px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
+    <div style="margin-bottom:8px">
       <span style="font-size:11px;font-weight:700;color:var(--p);text-transform:uppercase">📎 Insurance Documents — مستندات التأمين</span>
-      ${c?.id?'<button type="button" class="btn bs btn-sm" onclick="printFullFile(\''+c.id+'\')" style="font-size:11px">📁 Full File PDF</button>':''}
+      <!-- [Phase C3.1 — Fix F] Inline 📁 Full File PDF button removed; wizard footer
+           button is always visible across all tabs and serves the same purpose. -->
     </div>
     <div class="fdrop" onclick="document.getElementById('f_files').click()" style="cursor:pointer;border:1.5px dashed var(--g300);border-radius:6px;padding:14px;text-align:center;background:var(--g50)">
       <div style="font-size:22px;margin-bottom:4px">📎</div>
@@ -5927,7 +5928,7 @@ function renderTab3Insurance(c,isAdmin,caseStatusOpts){
       return '<div class="fit" id="'+id+'">'
         +'<span>'+ico+'</span>'
         +'<span class="fit-nm" style="cursor:pointer;text-decoration:underline;color:var(--p)" onclick="previewFile(\''+id+'\')">'+f.name+'</span>'
-        +'<button class="fit-rm" onclick="document.getElementById(\''+id+'\').remove()">×</button>'
+        +'<button class="fit-rm" onclick="removeAttachmentRow(\''+id+'\')">×</button>'
         +'<span class="fit-data" style="display:none" data-type="'+(f.type||'')+'" data-url="'+_encUrl+'"></span>'
         +'</div>';
     }).join('')}</div>
@@ -6155,36 +6156,13 @@ function renderCaseTab4(c,score,settlementType,isTransfer){
 
   const scoreColor=score.total>=80?'var(--gr)':score.total>=50?'var(--am)':'var(--red)';
 
-  // [Session #7 R2-#5] Attachments — moved here from Tab 1 because logically
-  // they're added after the case is processed (GOP letter, lab scans, etc.).
-  // The same DOM IDs (f_files / fileList) are kept so saveCase + handleFiles
-  // continue to work without modification.
-  const attachmentsHTML = `
-  <div style="background:var(--g50);border:1px solid var(--g200);border-radius:var(--ra);padding:12px 16px;margin-bottom:14px">
-    <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:8px">
-      <span style="font-size:13px;font-weight:700;color:var(--g700)">📎 Attachments — المرفقات</span>
-      ${c?.id?'<button type="button" class="btn bs btn-sm" onclick="printFullFile(\''+c.id+'\')" style="font-size:11px">📁 Full File PDF</button>':''}
-    </div>
-    <div class="fdrop" onclick="document.getElementById('f_files').click()" style="cursor:pointer;border:1.5px dashed var(--g300);border-radius:6px;padding:14px;text-align:center;background:#fff">
-      <div style="font-size:22px;margin-bottom:4px">📎</div>
-      <div style="font-size:12px;color:var(--g600)">Click to upload — GOP · Medical Reports · Lab Results · Images</div>
-    </div>
-    <input type="file" id="f_files" multiple accept=".pdf,.jpg,.jpeg,.png,.doc,.docx" style="display:none" onchange="handleFiles(this)">
-    <div id="fileList" style="margin-top:8px">${(c?.files||[]).map((f,fi)=>{
-      const id='sf'+fi+'_'+Date.now();
-      const ico=f.type&&f.type.startsWith('image/')?'🖼️':f.type==='application/pdf'?'📄':'📎';
-      const _encUrl=f.url?encodeURIComponent(f.url):'';
-      return '<div class="fit" id="'+id+'">'
-        +'<span>'+ico+'</span>'
-        +'<span class="fit-nm" style="cursor:pointer;text-decoration:underline;color:var(--p)" onclick="previewFile(\''+id+'\')">'+f.name+'</span>'
-        +'<button class="fit-rm" onclick="document.getElementById(\''+id+'\').remove()">×</button>'
-        +'<span class="fit-data" style="display:none" data-type="'+(f.type||'')+'" data-url="'+_encUrl+'"></span>'
-        +'</div>';
-    }).join('')}</div>
-  </div>`;
+  // [Phase C3.1 — Fix E] Attachments UI removed from Discharge tab.
+  // Attachments are case-wide and live in the Insurance tab (Tab 3) which is
+  // the canonical upload point. Discharge tab focuses on discharge meds + notes.
+  // Also removes the duplicate 📁 Full File PDF button (Fix F) — wizard footer
+  // button still always visible. The same `case.files[]` data is unchanged.
 
   return `
-  ${attachmentsHTML}
   <!-- Completion Score -->
   <div style="background:var(--g50);border:1px solid var(--g200);border-radius:var(--ra);padding:12px 16px;margin-bottom:14px">
     <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:8px">
@@ -6395,7 +6373,7 @@ function initCaseTabElements(tab,c,settlementType,isTransfer){
           div.innerHTML='<span>'+ico+'</span>'
             +'<span class="fit-nm" style="cursor:pointer;text-decoration:underline;color:var(--p)" onclick="previewFile(\''+id+'\')">'+f.name+'</span>'
             +'<span style="font-size:10px;color:var(--g500);margin-left:4px">'+(f.size?(Math.round(f.size/1024)+'KB'):'')+'</span>'
-            +'<button class="fit-rm" onclick="document.getElementById(\''+id+'\').remove()">×</button>'
+            +'<button class="fit-rm" onclick="removeAttachmentRow(\''+id+'\')">×</button>'
             +'<span class="fit-data" style="display:none" data-type="'+(f.type||'')+'" data-url="'+_encUrl+'"></span>';
           fileList.appendChild(div);
         });
@@ -7623,42 +7601,30 @@ function filterIns(tab){
   }).join('')||'<tr><td colspan="15" style="text-align:center;padding:32px;color:var(--g500)">No insurance cases found</td></tr>';
 }
 
+// [Phase C3.1 — Fix H] finalizeInsurance now reuses printFullFile for the print
+// side-effect. The legacy "Insurance Claim Summary" HTML block (Patient / Our
+// Ref / Date / Currency / Status / Invoice Amount / Excess Fee) is dropped —
+// it was the source of the "INVOICE SUMMARY" block users saw in their Patient
+// File output. Single source of truth: ALL case-level prints go through
+// printFullFile (Attachments → MR → Full Invoice → Labs → Meds Breakdown).
 function finalizeInsurance(caseId){
   const c=getCases().find(x=>x.id===caseId);
   if(!c){toast('Case not found','err');return;}
   if(c.invoiceStatus==='Draft'||!c.invoiceAmount){
     if(!confirm('This case is still Draft. Finalize and mark as Invoiced?')) return;
     const cs=getCases();const idx=cs.findIndex(x=>x.id===caseId);
-    if(idx>=0){cs[idx].invoiceStatus='Invoiced';cs[idx].invoiceDate=cs[idx].invoiceDate||new Date().toISOString().split('T')[0];saveCases(cs);pushCase(cs[idx]).catch(()=>{});toast('Case finalized → Invoiced','ok');filterIns();}
-    return;
+    if(idx>=0){
+      cs[idx].invoiceStatus='Invoiced';
+      cs[idx].invoiceDate=cs[idx].invoiceDate||new Date().toISOString().split('T')[0];
+      saveCases(cs);
+      pushCase(cs[idx]).catch(()=>{});
+      toast('Case finalized → Invoiced','ok');
+      filterIns();
+    }
+    // Continue to print the canonical Full File after finalize (was: return).
   }
-  // Print insurance claim summary
-  const html=`<!DOCTYPE html><html><head><title>Insurance Claim — ${c.patientName}</title>
-  <style>body{font-family:Arial,sans-serif;margin:24px;font-size:13px}table{width:100%;border-collapse:collapse}td,th{padding:6px 10px;border:1px solid #ddd}th{background:#1a5fa8;color:#fff}.hdr{display:flex;justify-content:space-between;padding-bottom:12px;border-bottom:3px solid #1a5fa8;margin-bottom:16px}</style>
-  </head><body>
-  <div class="hdr"><div><div style="font-size:18px;font-weight:700;color:#1a5fa8">HURGHADA MEDICAL CENTER</div><div style="font-size:12px;color:#6c757d">Insurance Claim Summary</div></div>
-  <div style="text-align:right;font-size:12px"><div><b>Our Ref:</b> ${c.ourRef||c.id}</div><div><b>Date:</b> ${fmtDate(new Date().toISOString().split('T')[0])}</div></div></div>
-  <table style="margin-bottom:14px"><tr><th colspan="2">Patient Information</th></tr>
-  <tr><td><b>Patient</b></td><td>${c.patientName}</td></tr>
-  <tr><td><b>Nationality</b></td><td>${c.nationality}</td></tr>
-  <tr><td><b>DOB</b></td><td>${fmtDate(c.dob)}</td></tr>
-  <tr><td><b>Date of Admission</b></td><td>${fmtDate(c.kaDate)}</td></tr>
-  <tr><td><b>Diagnosis</b></td><td>${c.diagnosis}</td></tr>
-  <tr><td><b>Treated At</b></td><td>${getBr(c.treatedAt||c.branch).name}</td></tr>
-  </table>
-  <table style="margin-bottom:14px"><tr><th colspan="2">Insurance Details</th></tr>
-  <tr><td><b>Insurance Company</b></td><td>${c.insuredBy||'—'}</td></tr>
-  <tr><td><b>Assistance Company</b></td><td>${c.assistanceBy||'—'}</td></tr>
-  <tr><td><b>Insurance Ref</b></td><td>${c.insuranceRef||'—'}</td></tr>
-  <tr><td><b>Assistance Ref</b></td><td>${c.assistanceRef||'—'}</td></tr>
-  <tr><td><b>Invoice Amount</b></td><td style="font-weight:700">${c.invoiceAmount||0} ${c.currency||'EUR'}</td></tr>
-  <tr><td><b>GOP Amount</b></td><td>${c.gopedAmount||'Pending'}</td></tr>
-  <tr><td><b>Excess Fee</b></td><td>${c.excessAmount||0} ${c.excessCurrency||'EUR'}</td></tr>
-  <tr><td><b>Status</b></td><td><b>${c.caseStatus||'—'}</b></td></tr>
-  </table>
-  <div style="margin-top:40px;display:flex;gap:60px"><div><div style="border-top:1px solid #000;padding-top:4px;margin-top:50px">Medical Director</div></div><div><div style="border-top:1px solid #000;padding-top:4px;margin-top:50px">Insurance Officer</div></div></div>
-  <script>window.print();setTimeout(()=>window.close(),1200);<\/script></body></html>`;
-  const w=window.open('','_blank','width=800,height=650');w.document.write(html);w.document.close();
+  // Route to canonical Full File generator instead of legacy summary HTML.
+  printFullFile(caseId);
 }
 
 function printInsIndex(){
@@ -8293,19 +8259,32 @@ async function handleFiles(input){
       div.innerHTML='<span>'+ico+'</span>'
         +'<span class="fit-nm" style="cursor:pointer;text-decoration:underline;color:var(--p)" onclick="previewFile(\''+id+'\')">'+file.name+'</span>'
         +'<span style="font-size:10px;color:var(--g500);margin-left:4px">('+sizeStr+') ☁️</span>'
-        +'<button class="fit-rm" onclick="document.getElementById(\''+id+'\').remove()">×</button>'
+        +'<button class="fit-rm" onclick="removeAttachmentRow(\''+id+'\')">×</button>'
         +'<span class="fit-data" style="display:none" data-type="'+file.type+'" data-url="'+enc+'"></span>';
     } catch(e){
       console.error('handleFiles upload failed:',e);
       div.innerHTML='<span>❌</span>'
         +'<span class="fit-nm" style="color:var(--r)">'+file.name+' — '+(e.message||'Upload failed')+'</span>'
-        +'<button class="fit-rm" onclick="document.getElementById(\''+id+'\').remove()">×</button>';
+        +'<button class="fit-rm" onclick="removeAttachmentRow(\''+id+'\')">×</button>';
       if(typeof toast==='function') toast('فشل رفع '+file.name+' — '+(e.message||'').slice(0,80),'err');
     }
   }
   input.value=''; // reset so same file can be uploaded again
 }
 window.handleFiles=handleFiles;
+
+// [Phase C3.1] Remove attachment row + immediately persist via saveCase('draft', false)
+// so the deletion survives modal close / page reload. Was previously DOM-only,
+// causing deleted files to resurrect from Supabase on reload (Issue #10).
+function removeAttachmentRow(elementId){
+  const el=document.getElementById(elementId);
+  if(!el) return;
+  el.remove();
+  if(typeof saveCase==='function' && typeof EDIT_ID!=='undefined' && EDIT_ID){
+    try{ saveCase('draft', false); }catch(e){ console.warn('removeAttachmentRow: saveCase failed',e); }
+  }
+}
+window.removeAttachmentRow=removeAttachmentRow;
 
 function previewFile(id){
   const item=document.getElementById(id);
@@ -10313,8 +10292,17 @@ function printInv(){
 //  #9 — PRINT FULL PATIENT FILE
 // ════════════════════════════════════════════
 async function printFullFile(caseId){
+  // [Phase C3.1] Open the popup window FIRST inside the user gesture.
+  // iOS Safari/PWA revoke gesture across `await`, so window.open must precede
+  // any async call (idbGetFiles below). A loading placeholder gives the user
+  // immediate feedback while IDB resolves; then we overwrite with the final HTML.
+  const w=window.open('','_blank','width=900,height=750');
+  if(!w){toast('⚠️ Allow popups to open file','warn');return;}
+  w.document.write('<!doctype html><html><head><title>Loading Patient File…</title><meta charset="utf-8"></head><body style="font:14px Arial,sans-serif;padding:60px;text-align:center;color:#1B3A5C"><div style="font-size:18px;margin-bottom:8px">⏳ Generating Patient File…</div><div style="font-size:12px;color:#6c757d">Loading attachments and building combined document.</div></body></html>');
+  w.document.close();
+
   const c=getCases().find(x=>x.id===caseId);
-  if(!c){toast('Case not found','err');return;}
+  if(!c){try{w.close();}catch(e){}toast('Case not found','err');return;}
   // Load full files (with data URLs) from IndexedDB
   const idbFiles=await idbGetFiles(caseId);
   if(idbFiles&&idbFiles.length) c.files=idbFiles;
@@ -10342,13 +10330,10 @@ async function printFullFile(caseId){
   const _isElevatedRole=(typeof CU!=='undefined'&&CU&&(CU.role==='admin'||CU.role==='reception'));
   const includeInvoice=!_isInsCase||_isElevatedRole;
 
-  // Payments section
-  const payRows=(c.payments||[]).filter(p=>p.method&&(p.amount>0||p.method==='Free')).map(p=>{
-    const isFree=p.method==='Free';
-    const egpEq=p.totalEGP?` (${(parseFloat(p.totalEGP)||0).toLocaleString()} EGP)`:'';
-    return `<tr><td>${p.method}${isFree?(p.approvedBy?` — Approved by: ${p.approvedBy}`:'')+(p.freeReason?` — Reason: ${p.freeReason}`:''): ''}</td>
-      <td style="text-align:right;font-weight:600">${isFree?'FREE':(parseFloat(p.amount)||0).toLocaleString()+' '+(p.currency||curr)+egpEq}</td></tr>`;
-  }).join('');
+  // [Phase C3.1 — Fix G] Removed dead payRows block — was built but never
+  // emitted in the final HTML. Payment totals now appear only inside the full
+  // invoice via buildInvoiceBodyHTML's totals section, which is the single
+  // source of truth for payment-side numbers in the combined Full File.
 
   // ── Medical Report Section (full style matching printRpt) ──
   const blist=arr=>arr.map(x=>'<li style="margin-bottom:3px">'+x+'</li>').join('');
@@ -10395,6 +10380,14 @@ async function printFullFile(caseId){
   // Both insurance and cash full-file prints now show the complete report. We
   // temporarily swap RPT_DATA so wizRenderPrintable reads from this case's data,
   // then restore the previous state.
+  // [Phase C3.1] MR section: wrap wizard-rendered HTML with the SAME official
+  // letterhead used by the standalone Print MR (wizDoPrint), so the combined
+  // Full File MR is pixel-identical to standalone print. The wizard returns
+  // body content with classes (.rpt-title, .rpt-table, .rpt-section, .rpt-dx,
+  // .rpt-vitals, .rpt-session-hdr) — those CSS rules are now imported into
+  // printFullFile's <style> block below so the wizard MR renders styled, not
+  // plain. Fixes both Issue #6 (letterhead) and the "plain version" half of
+  // Issue #3 (twice rendering).
   let rptSection = '';
   try {
     if((r && (r.complaint || (r.visits||[]).length>0)) && typeof wizRenderPrintable==='function' && typeof wizInitData==='function'){
@@ -10402,7 +10395,10 @@ async function printFullFile(caseId){
       RPT_DATA = wizInitData(c);
       const fullHtml = wizRenderPrintable(c, isSahl?'SMC':'HMC');
       RPT_DATA = _prevRPT;
-      rptSection = '<div style="page-break-before:always;"></div>' + fullHtml;
+      const wrapped = (typeof wrapWithLetterhead==='function')
+        ? wrapWithLetterhead(fullHtml, isSahl?'SMC':'HMC')
+        : fullHtml;
+      rptSection = '<div style="page-break-before:always;"></div>' + wrapped;
     }
   } catch(_e){
     console.warn('Full-report render failed, falling back to condensed:',_e);
@@ -10509,13 +10505,32 @@ async function printFullFile(caseId){
 <\/script>
 `:'<script>setTimeout(function(){window.print();setTimeout(function(){window.close();},2500);},400);<\/script>';
 
+    const _mrAccent = isSahl ? '#C00000' : '#111';
+    const _mrTitle  = isSahl ? '#C00000' : '#111';
     const html=`<!DOCTYPE html><html lang="en"><head><title>Patient File — ${c.patientName}</title>
   <style>
     body{font-family:Arial,sans-serif;margin:20px;font-size:12px;color:#212529}
-    *{box-sizing:border-box}
+    /* [Phase C3.1] Force color preservation on print so accents/headers don't drop to grayscale. */
+    *{box-sizing:border-box;-webkit-print-color-adjust:exact !important;print-color-adjust:exact !important;color-adjust:exact !important}
     table{width:100%;border-collapse:collapse}
     td,th{padding:6px 10px;border:1px solid #dee2e6}
     h2{color:#1B3A5C;font-size:14px;border-bottom:2px solid #1B3A5C;padding-bottom:4px;margin:14px 0 10px}
+    /* [Phase C3.1] Wizard-rendered MR classes — imported from wizDoPrint so the
+       wizard MR section renders with proper colors (was plain HTML before). */
+    .rpt-title{text-align:center;font-size:17px;font-weight:700;margin:10px 0 4px;color:${_mrTitle}}
+    .rpt-table{width:100%;border-collapse:collapse;margin:6px 0 12px;border:1.5px solid #000}
+    .rpt-table td{border:1px solid #000;padding:4px 8px;font-size:12px;vertical-align:top}
+    .rpt-table .yh{background:#fff9c4;font-weight:700}
+    .rpt-section{margin:8px 0}
+    .rpt-section h3{font-size:12.5px;font-weight:700;text-decoration:underline;margin-bottom:3px;color:${_mrAccent}}
+    .rpt-section ul{margin:2px 0;padding-left:22px}
+    .rpt-section li{margin:1px 0;font-size:12px}
+    .rpt-dx{background:#fff9c4;padding:6px 10px;border:1.5px solid ${isSahl?'#C00000':'#000'};font-weight:700;font-size:13px;margin:10px 0}
+    .rpt-dx h3{text-decoration:underline;margin:0 0 4px;color:${_mrAccent};font-size:13px}
+    .rpt-dx div{font-weight:600}
+    .rpt-vitals{margin:3px 0;display:inline-block;min-width:320px}
+    .rpt-vitals td{padding:1px 8px 1px 0;font-size:12px;border:none;vertical-align:top}
+    .rpt-session-hdr{font-weight:700;text-decoration:underline;color:${_mrAccent};font-size:12.5px;margin:10px 0 4px}
     @media print{
       body{margin:5mm}.no-print{display:none}
       canvas{display:block;width:100%!important;height:auto!important;margin:0!important}
@@ -10669,7 +10684,11 @@ async function printFullFile(caseId){
   ${pdfRenderScript}
 
     </body></html>`;
-  const w=window.open('','_blank','width=900,height=750');w.document.write(html);w.document.close();
+  // [Phase C3.1] Reuse the window opened at the top of the function (PWA-safe).
+  // Overwrite the loading placeholder with the final document.
+  w.document.open();
+  w.document.write(html);
+  w.document.close();
 }
 
 // ── Labs Breakdown Print ──
