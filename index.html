@@ -1058,6 +1058,42 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
     min-height: 40px;
     width: 100% !important;
   }
+
+  /* ────────────────────────────────────────────────────────────────────
+     [Phase M2.1] New Case Wizard date/time overflow fix.
+     iOS Safari renders <input type="date"> / <input type="time"> with
+     native chrome (calendar/clock icon) that paints OUTSIDE the input
+     border on the right. With input width = card inner width exactly,
+     that native chrome visually escapes the blue card boundary on real
+     iOS devices (web preview doesn't reproduce this — Chromium chrome
+     is rendered differently).
+     Defensive scope: only the blue Visit Date & Time card section
+     (matched by inline `border:1.5px solid var(--p)` + `border-radius:8px`).
+     Clip any visual escape at the card edge. Picker dropdowns are not
+     affected — they render as overlays, not as DOM children.
+     ──────────────────────────────────────────────────────────────────── */
+  /* [Phase M2.1-a] Clip the blue date/time card border so iOS native input
+     chrome cannot paint past the rounded card edge. */
+  .mbody div[style*="border:1.5px solid var(--p)"][style*="border-radius:8px"],
+  #cmBody div[style*="border:1.5px solid var(--p)"][style*="border-radius:8px"]{
+    overflow: hidden;
+  }
+  /* [Phase M2.1-b] Reaffirm box-sizing + max-width on date/time .fsi inputs
+     in case iOS user-agent styles override the global *{box-sizing:border-box}
+     at line 21. min-width:0 prevents grid implicit-min-content overflow. */
+  input.fsi[type="date"],
+  input.fsi[type="time"],
+  input.fsi[type="datetime-local"]{
+    box-sizing: border-box !important;
+    max-width: 100% !important;
+    min-width: 0 !important;
+  }
+  /* [Phase M2.1-c] Grid container inside the blue card — guarantee it can't
+     blow past its parent. Belt-and-suspenders against grid implicit min-content. */
+  div[style*="border:1.5px solid var(--p)"] > div[style*="display:grid"]{
+    min-width: 0 !important;
+    max-width: 100% !important;
+  }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
