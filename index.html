@@ -2320,6 +2320,20 @@ const PL = [
   {c:'PL45-008',n:'IV Cannula — Disposable',s:'IV Cannula — Disposable',cat:'lab',hmc:3.0,smc:3.0,u:'per service'},
   {c:'PL45-009',n:'Nurses & Doctors Masks (per unit)',s:'Nurses & Doctors Masks (per unit)',cat:'lab',hmc:0.5,smc:0.5,u:'per service'},
   {c:'PL45-010',n:'Gloves (per pair)',s:'Gloves (per pair)',cat:'lab',hmc:2.0,smc:2.0,u:'per service'},
+
+  // [Phase D1] Aggregate / generic placeholder PL codes — these replace the
+  // legacy facility-prefixed (HMC-LAB-PKG / HMC-MED-PKG) and generic
+  // (LAB-GENERIC / IMG-GENERIC) codes so official invoice output never
+  // contains a facility prefix or a hardcoded generic placeholder.
+  // - PL90-001 / PL90-002: aggregate "breakdown attached" summary lines.
+  //   Their unit/total in the invoice come from the sum of breakdown rows,
+  //   so the PL price is 0 (they're not standalone services).
+  // - PL90-003 / PL90-004: catch-all when wizard search doesn't match
+  //   Supabase exactly. Prices match the previous hardcoded fallbacks.
+  {c:'PL90-001',n:'Laboratory Investigations — Breakdown Attached',s:'lab investigations breakdown',cat:'aggregate',hmc:0,smc:0,u:'package'},
+  {c:'PL90-002',n:'Medications, Disposables & Consumables — Breakdown Attached',s:'meds disposables consumables breakdown',cat:'aggregate',hmc:0,smc:0,u:'package'},
+  {c:'PL90-003',n:'Laboratory Test (Unspecified)',s:'lab test unspecified generic',cat:'lab',hmc:45,smc:45,u:'per test'},
+  {c:'PL90-004',n:'Imaging Service (Unspecified)',s:'imaging service unspecified generic',cat:'imaging',hmc:150,smc:150,u:'per service'},
 ];
 
 // Smart search within category
@@ -9518,15 +9532,20 @@ function _lbdPickItem(idx){
   document.getElementById('lbdPick')?.remove();
 }
 function _lbdSaveToInvoice(){
-  const invIdx=INV_ITEMS.findIndex(x=>x._type==='labs' || x.code==='HMC-LAB-PKG');
+  // [Phase D1] Detect both legacy HMC-LAB-PKG and new neutral PL90-001
+  // when matching an existing labs item to update.
+  const invIdx=INV_ITEMS.findIndex(x=>x._type==='labs' || x.code==='HMC-LAB-PKG' || x.code==='PL90-001');
   const grand=LBD_DATA.items.reduce((s,it)=>s+(it.total||0),0);
   const labItems=LBD_DATA.items.map(it=>({code:it.code,name:it.name,qty:it.qty,unit:it.unit,total:it.total,date:it.date,price:it.unit}));
   if(invIdx>=0){
     INV_ITEMS[invIdx].total=grand;
     INV_ITEMS[invIdx].unit=grand;
     INV_ITEMS[invIdx].labItems=labItems;
+    // [Phase D1] Upgrade legacy code on next save
+    if(INV_ITEMS[invIdx].code==='HMC-LAB-PKG') INV_ITEMS[invIdx].code='PL90-001';
   } else {
-    INV_ITEMS.push({desc:'Laboratory Investigations — Breakdown Attached',qty:1,unit:grand,total:grand,_type:'medical',code:'HMC-LAB-PKG',_order:5,labItems});
+    // [Phase D1] New aggregate uses neutral PL90-001 code (was HMC-LAB-PKG).
+    INV_ITEMS.push({desc:'Laboratory Investigations — Breakdown Attached',qty:1,unit:grand,total:grand,_type:'medical',code:'PL90-001',_order:5,labItems});
   }
   renderInvItems();
   // PERSIST to case.invoiceItems — same fix as _mbdSaveToInvoice. Without this, Print reads the
@@ -9751,7 +9770,8 @@ function _mbdSaveToInvoice(){
     INV_ITEMS[invIdx].labItems=bdItems;
     INV_ITEMS[invIdx].mbdGroups=MBD_DATA.groups;
   } else {
-    INV_ITEMS.push({desc:'Medications, Disposables & Consumables — Breakdown Attached',qty:1,unit:grand,total:grand,_type:'meds',code:'HMC-MED-PKG',_order:8,labItems:bdItems,mbdGroups:MBD_DATA.groups});
+    // [Phase D1] Use neutral PL90-002 instead of legacy HMC-MED-PKG.
+    INV_ITEMS.push({desc:'Medications, Disposables & Consumables — Breakdown Attached',qty:1,unit:grand,total:grand,_type:'meds',code:'PL90-002',_order:8,labItems:bdItems,mbdGroups:MBD_DATA.groups});
   }
   renderInvItems();
   // PERSIST to case.invoiceItems so the printed breakdown reflects edits immediately.
@@ -10271,11 +10291,27 @@ function buildInvoiceBodyHTML(c, opts){
   const _scItem=items.filter(x=>x._type==='sc');
   const _accOnly=items.filter(x=>_ACCOM.includes(x._type));
   const _medOnly=items.filter(x=>x._type!=='meds'&&x._type!=='sc'&&!_ACCOM.includes(x._type));
+  // [Phase D1] Display-code normalization — defensive safeguard so any legacy
+  // facility-prefixed (HMC-*) or hardcoded generic (*-GENERIC) codes that may
+  // still be present in saved invoiceItems are mapped to neutral PL codes
+  // ON DISPLAY ONLY. Saved data is not modified. Empty test data + new
+  // generations will already use the neutral codes; this map only kicks in
+  // for legacy items.
+  const _D1_LEGACY_CODE_MAP = {
+    'HMC-LAB-PKG':'PL90-001',
+    'HMC-MED-PKG':'PL90-002',
+    'LAB-GENERIC':'PL90-003',
+    'IMG-GENERIC':'PL90-004',
+    'XRAY-GENERIC':'PL23-001',
+    'SPEC-GENERIC':'PL01-002'
+  };
   const _mkRow=(it,i)=>{
     const bg=i%2===0?'#EBF3FB':'#fff';
     const unitVal=(typeof it.unit==='number'?it.unit:it.total)||0;
     // [Session #5 fix] Defensive code fallback — legacy items used `_sbCode`, older ones `plCode`.
-    const rowCode = it.code || it._sbCode || it.plCode || '—';
+    // [Phase D1] After fallback, normalize legacy facility/generic codes for display.
+    const rawCode = it.code || it._sbCode || it.plCode || '—';
+    const rowCode = _D1_LEGACY_CODE_MAP[rawCode] || rawCode;
     return '<tr style="background:'+bg+'">'
       +'<td style="padding:5px 8px;font-size:8.5pt;border-bottom:1px solid #DDD;font-family:monospace;color:#444;width:90px">'+rowCode+'</td>'
       +'<td style="padding:5px 8px;font-size:10pt;border-bottom:1px solid #DDD">'+it.desc+'</td>'
@@ -10829,9 +10865,11 @@ async function printFullFile(caseId){
     // [Phase C3.1 Hotfix-4] Detect labs by *presence* of labItems[] (the data),
     // OR by the HMC-LAB-PKG package code, OR by legacy _type==='labs'. Real cases
     // sometimes store the package as _type='medical' with labItems[] as metadata.
+    // [Phase D1] Also accept the new neutral PL90-001 code for forward compat.
     const labInvItem=(c.invoiceItems||[]).find(it=>
       it._type==='labs' ||
       it.code==='HMC-LAB-PKG' ||
+      it.code==='PL90-001' ||
       (Array.isArray(it.labItems)&&it.labItems.length>0)
     );
     if(!labInvItem) return '';
@@ -11766,8 +11804,9 @@ function generateInvoiceFromNS(){
     const vLabs=v.labs||[];
     if(vLabs.length>0){
       const labTotal=vLabs.reduce((s,l)=>s+(l.price||0),0);
+      // [Phase D1] Use neutral PL90-001 instead of legacy HMC-LAB-PKG.
       items.push({desc:prefix+'Laboratory Investigations — Breakdown Attached',qty:1,unit:labTotal,total:labTotal,
-        _type:'medical', code:'HMC-LAB-PKG', _order:5, auto:true,
+        _type:'medical', code:'PL90-001', _order:5, auto:true,
         labItems:vLabs.map(l=>({code:l.code||'',name:l.name,price:l.price||0,qty:l.qty||1,unit:l.price||0,total:(l.qty||1)*(l.price||0),date:l.date||''}))});
     }
 
@@ -16055,7 +16094,8 @@ async function wizAddLabPanel(panelKey){
       // Supabase miss — add a generic fallback so the panel is complete.
       const displayName = variantList[0];
       if(!wizV().labs.find(l => (l.name||'').toLowerCase() === displayName.toLowerCase())){
-        wizV().labs.push({ id: '', code: 'LAB-GENERIC', name: displayName, price: LAB_FALLBACK_PRICE });
+        // [Phase D1] Use neutral PL90-003 instead of legacy LAB-GENERIC fallback.
+        wizV().labs.push({ id: '', code: 'PL90-003', name: displayName, price: LAB_FALLBACK_PRICE });
         fallback++;
       }
     }
@@ -16154,7 +16194,8 @@ function wizAddImaging(img){
     img._priceFallback = true;
   }
   // Allow duplicates of the generic code but not duplicate of specific named imaging
-  const exists = img.code && img.code !== 'IMG-GENERIC' && wizV().imaging.find(l=>l.code===img.code && l.name===img.name);
+  // [Phase D1] Accept both legacy IMG-GENERIC and new neutral PL90-004 in dedup check.
+  const exists = img.code && img.code !== 'IMG-GENERIC' && img.code !== 'PL90-004' && wizV().imaging.find(l=>l.code===img.code && l.name===img.name);
   if(!exists) wizV().imaging.push(img);
   const qEl = document.getElementById('wiz_img_q');
   const rEl = document.getElementById('wiz_img_results');
@@ -16177,7 +16218,8 @@ async function wizQuickAddImaging(name){
     } catch(e){}
   }
   // Fallback: 150€ generic imaging service (ECG, Echo, US views all priced at 150€ per view)
-  wizAddImaging({code: 'IMG-GENERIC', name: name, price: 150});
+  // [Phase D1] Use neutral PL90-004 instead of legacy IMG-GENERIC fallback.
+  wizAddImaging({code: 'PL90-004', name: name, price: 150});
   toast(`${name} added as generic imaging service (150€) — add to Supabase for live pricing`, 'info');
 }
 window.wizSearchImaging = wizSearchImaging;
@@ -16229,8 +16271,13 @@ async function wizAddSelectedXrays(){
       }
     } catch(e){}
   }
-  const defaultPrice = genericHit ? genericHit.price : 150;
-  const defaultCode = genericHit ? (genericHit.c || genericHit.code) : 'XRAY-GENERIC';
+  // [Phase D1] When no Supabase generic-X-Ray match, fall back to the official
+  // PL23-001 catalog entry ("X-Ray — Any Region / Body Part — per view") and
+  // use its catalog price (org-aware) instead of the legacy hardcoded 150.
+  const _xrayPL = (typeof PL!=='undefined') ? PL.find(p=>p.c==='PL23-001') : null;
+  const _xrayCatalogPrice = _xrayPL ? (org==='sahl' ? _xrayPL.smc : _xrayPL.hmc) : 150;
+  const defaultPrice = genericHit ? genericHit.price : _xrayCatalogPrice;
+  const defaultCode = genericHit ? (genericHit.c || genericHit.code) : 'PL23-001';
   let added = 0;
   checks.forEach(chk => {
     const name = chk.value;
@@ -16263,7 +16310,8 @@ function wizStep4(){
       </div>
       <div style="display:flex;gap:4px;flex-wrap:wrap;margin-bottom:10px">
         ${['ENT','Internal Medicine','General Surgery','Orthopedic','Cardiology','Pulmonology','Urology','Pediatric','Neurology','Dermatology','Gynecology','ICU'].map(c=>`<button class="btn bs btn-sm" style="font-size:10px" onclick="wizQuickAddConsultation('${c.replace(/'/g,"\\'")}')">+ ${c}</button>`).join('')}
-        <button class="btn bs btn-sm" style="font-size:10px;background:#ecfdf5" onclick="wizAddConsultation({code:'SPEC-GENERIC',name:'Specialist Consultation (generic)',price:150})">+ Generic Specialist (150€)</button>
+        <!-- [Phase D1] Use neutral PL01-002 (Specialist Consultation, official catalog code) instead of legacy SPEC-GENERIC. -->
+        <button class="btn bs btn-sm" style="font-size:10px;background:#ecfdf5" onclick="wizAddConsultation({code:'PL01-002',name:'Specialist Consultation',price:150})">+ Generic Specialist (150€)</button>
       </div>
       ${d.consultations.length === 0 ? '<div style="padding:14px;text-align:center;color:#94a3b8;border:1px dashed #cbd5e1;border-radius:6px;background:#fff">No consultations added. ER Examination (100€) is included by default.</div>' :
         d.consultations.map((c,i)=>{
@@ -16347,13 +16395,14 @@ async function wizQuickAddConsultation(name){
     wizAddConsultation({code:hits[0].c, name:hits[0].s, price:hits[0].price});
     return;
   }
-  // Fallback: generic specialist consultation at 150€
+  // [Phase D1] Fallback: use the official PL01-002 (Specialist Consultation)
+  // code instead of legacy SPEC-GENERIC. Price stays 150 € (matches catalog).
   wizAddConsultation({
-    code: 'SPEC-GENERIC',
+    code: 'PL01-002',
     name: name + ' Consultation',
     price: 150
   });
-  toast(`${name} not in Supabase → added as generic specialist (150€)`,'info');
+  toast(`${name} not in Supabase → added as generic specialist (PL01-002 @ 150€)`,'info');
 }
 function wizToggleProcedure(id){
   const idx = wizV().procedures.findIndex(p=>p.id===id);
@@ -17091,12 +17140,15 @@ async function wizBuildInvoiceItems(caseData){
   visits.forEach(v => {
     (v.consultations||[]).forEach(c => {
       const qty = c.qty || 1;
-      if(c.code && c.code !== 'SPEC-GENERIC'){
+      // [Phase D1] Skip legacy SPEC-GENERIC and new PL01-002-as-fallback from
+      // the strict PL lookup branch (they're catch-all placeholders). Use
+      // PL01-002 as the neutral fallback code.
+      if(c.code && c.code !== 'SPEC-GENERIC' && c.code !== 'PL01-002'){
         const r = plFind(c.code);
         if(r) items.push(mkInv('medical', r.code, r.name, qty, r.price));
         else items.push(mkInv('medical', c.code, c.name, qty, c.price||0));
       } else {
-        items.push(mkInv('medical', c.code||'SPEC-GENERIC', c.name||'Specialist Consultation', qty, c.price||0));
+        items.push(mkInv('medical', c.code||'PL01-002', c.name||'Specialist Consultation', qty, c.price||0));
       }
     });
   });
@@ -17141,8 +17193,9 @@ async function wizBuildInvoiceItems(caseData){
       date: l._date
     }));
     const labsTotal = labItems.reduce((s,x) => s + x.total, 0);
+    // [Phase D1] Use neutral PL90-001 instead of legacy HMC-LAB-PKG.
     items.push(Object.assign(
-      mkInv('medical', 'HMC-LAB-PKG', 'Laboratory Investigations — Breakdown Attached', 1, labsTotal),
+      mkInv('medical', 'PL90-001', 'Laboratory Investigations — Breakdown Attached', 1, labsTotal),
       { labItems }
     ));
   }
@@ -17150,12 +17203,14 @@ async function wizBuildInvoiceItems(caseData){
   // 7. Imaging — SEPARATE lines (across all visits, no aggregation by code)
   visits.forEach(v => {
     (v.imaging||[]).forEach(img => {
-      if(img.code && img.code !== 'IMG-GENERIC'){
+      // [Phase D1] Skip legacy IMG-GENERIC and new PL90-004 from PL lookup
+      // (they're catch-all placeholders). Use neutral PL90-004 as fallback.
+      if(img.code && img.code !== 'IMG-GENERIC' && img.code !== 'PL90-004'){
         const r = plFind(img.code);
         if(r) items.push(mkInv('medical', r.code, r.name, img.qty||1, r.price));
         else items.push(mkInv('medical', img.code, img.name, img.qty||1, img.price||0));
       } else {
-        items.push(mkInv('medical', img.code||'IMG-GENERIC', img.name, img.qty||1, img.price||0));
+        items.push(mkInv('medical', img.code||'PL90-004', img.name, img.qty||1, img.price||0));
       }
     });
   });
@@ -17265,8 +17320,9 @@ async function wizBuildInvoiceItems(caseData){
   const medsTotal = mbdGroups.reduce((s,g) => s + g.items.reduce((ss,it)=>ss+(it.total||0),0), 0);
   const medsItemCount = mbdGroups.reduce((s,g) => s + g.items.length, 0);
   if(medsItemCount > 0){
+    // [Phase D1] Use neutral PL90-002 instead of legacy HMC-MED-PKG.
     items.push(Object.assign(
-      mkInv('meds', 'HMC-MED-PKG', `Medications, Disposables & Consumables — Breakdown Attached`, 1, medsTotal),
+      mkInv('meds', 'PL90-002', `Medications, Disposables & Consumables — Breakdown Attached`, 1, medsTotal),
       { mbdGroups, labItems: [] }  // labItems:[] prevents v3 editor path
     ));
   }
