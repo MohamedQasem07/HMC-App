@@ -1094,6 +1094,31 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
     min-width: 0 !important;
     max-width: 100% !important;
   }
+
+  /* ────────────────────────────────────────────────────────────────────
+     [Phase M2.2] Date/time input spacing polish in the blue Visit Date &
+     Time card section. M2.1 added `overflow:hidden` on the card to clip
+     iOS native chrome, but on real iPhone the right side of each field
+     looked clipped/eaten.
+     Solution: make date/time inputs slightly narrower (10px) with auto
+     inline margins so they sit centered in the cell with 5px of breathing
+     room on each side — leaves room for iOS native calendar/clock chrome
+     without it touching the card border. Scoped strictly to date/time
+     inputs inside the blue Visit Date & Time card.
+     ──────────────────────────────────────────────────────────────────── */
+  .mbody div[style*="border:1.5px solid var(--p)"][style*="border-radius:8px"] input.fsi[type="date"],
+  .mbody div[style*="border:1.5px solid var(--p)"][style*="border-radius:8px"] input.fsi[type="time"],
+  .mbody div[style*="border:1.5px solid var(--p)"][style*="border-radius:8px"] input.fsi[type="datetime-local"],
+  #cmBody div[style*="border:1.5px solid var(--p)"][style*="border-radius:8px"] input.fsi[type="date"],
+  #cmBody div[style*="border:1.5px solid var(--p)"][style*="border-radius:8px"] input.fsi[type="time"],
+  #cmBody div[style*="border:1.5px solid var(--p)"][style*="border-radius:8px"] input.fsi[type="datetime-local"]{
+    width: calc(100% - 10px) !important;
+    max-width: calc(100% - 10px) !important;
+    margin-inline: auto !important;
+    display: block !important;
+    box-sizing: border-box !important;
+    min-width: 0 !important;
+  }
 }
 
 /* ════════════════════════════════════════════════════════════════════════
