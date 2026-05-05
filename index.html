@@ -4462,6 +4462,13 @@ const NAV={
   reception:[{id:'dashboard',ico:'📊',en:'Dashboard',ar:'لوحة التحكم'},{id:'cases',ico:'📋',en:'Cases',ar:'الحالات'},{id:'insurance',ico:'🛡️',en:'Insurance',ar:'التأمين'},{id:'insCos',ico:'🏢',en:'Ins. Companies',ar:'شركات التأمين'},{id:'finance',ico:'💰',en:'Finance',ar:'المالية'},{id:'shifts',ico:'📅',en:'Attendance',ar:'سجل الحضور'},{id:'reports',ico:'📈',en:'Reports',ar:'التقارير'},{id:'treasury',ico:'🏦',en:'Treasury',ar:'الخزينة'}],
   manager:[{id:'dashboard',ico:'📊',en:'Dashboard',ar:'لوحة التحكم'},{id:'cases',ico:'📋',en:'Cases',ar:'الحالات'},{id:'insurance',ico:'🛡️',en:'Insurance',ar:'التأمين'},{id:'staff',ico:'👥',en:'Staff',ar:'الموظفون'},{id:'shifts',ico:'📅',en:'Attendance',ar:'سجل الحضور'},{id:'reports',ico:'📈',en:'Reports',ar:'التقارير'},{id:'treasury',ico:'🏦',en:'Treasury',ar:'الخزينة'},{id:'assets',ico:'🏷️',en:'Assets',ar:'الأصول'}],
   nurse:[{id:'dashboard',ico:'📊',en:'My Clinic',ar:'عيادتي'},{id:'cases',ico:'📋',en:'Cases',ar:'الحالات'},{id:'shifts',ico:'📅',en:'My Attendance',ar:'سجل حضوري'},{id:'reports',ico:'📈',en:'Reports',ar:'التقارير'},{id:'treasury',ico:'🏦',en:'Treasury',ar:'الخزينة'},{id:'assets',ico:'🏷️',en:'Assets',ar:'الأصول'}],
+  // [Phase HR1a] New role NAV entries — fixes silent doctor→nurse fallback + adds 5 new HR roles
+  doctor:[{id:'dashboard',ico:'📊',en:'My Schedule',ar:'جدولي'},{id:'cases',ico:'📋',en:'My Cases',ar:'حالاتي'},{id:'shifts',ico:'📅',en:'My Attendance',ar:'سجل حضوري'},{id:'reports',ico:'📈',en:'Reports',ar:'التقارير'}],
+  head_nurse:[{id:'dashboard',ico:'📊',en:'Branch Overview',ar:'نظرة عامة'},{id:'cases',ico:'📋',en:'Cases',ar:'الحالات'},{id:'staff',ico:'👥',en:'My Nurses',ar:'الممرضين'},{id:'shifts',ico:'📅',en:'Attendance',ar:'سجل الحضور'},{id:'reports',ico:'📈',en:'Branch Reports',ar:'تقارير الفرع'},{id:'treasury',ico:'🏦',en:'Treasury',ar:'الخزينة'},{id:'assets',ico:'🏷️',en:'Assets',ar:'الأصول'}],
+  hr_manager:[{id:'dashboard',ico:'📊',en:'HR Dashboard',ar:'لوحة الموارد البشرية'},{id:'staff',ico:'👥',en:'Staff & HR',ar:'الموظفون'},{id:'users',ico:'🔐',en:'Users & Access',ar:'المستخدمون والصلاحيات'},{id:'shifts',ico:'📅',en:'Attendance',ar:'سجل الحضور'},{id:'reports',ico:'📈',en:'HR Reports',ar:'تقارير الموارد البشرية'}],
+  lab:[{id:'dashboard',ico:'📊',en:'My Tasks',ar:'مهامي'},{id:'shifts',ico:'📅',en:'My Attendance',ar:'سجل حضوري'}],
+  driver:[{id:'dashboard',ico:'📊',en:'My Trips',ar:'رحلاتي'},{id:'shifts',ico:'📅',en:'My Attendance',ar:'سجل حضوري'}],
+  accountant:[{id:'dashboard',ico:'📊',en:'Dashboard',ar:'لوحة التحكم'},{id:'finance',ico:'💰',en:'Finance',ar:'المالية'},{id:'treasury',ico:'🏦',en:'Treasury',ar:'الخزينة'},{id:'banks',ico:'🏛️',en:'Banks',ar:'البنوك'},{id:'reports',ico:'📈',en:'Financial Reports',ar:'التقارير المالية'},{id:'shifts',ico:'📅',en:'My Attendance',ar:'سجل حضوري'}],
 };
 async function doLogin(){
   const u=document.getElementById('lu').value.trim();
@@ -4513,12 +4520,109 @@ function showApp(){
 
 // [Session #5 WORKDAY cleanup] Removed showMandatoryShiftStart — replaced by
 // silent auto-checkin in showApp() via ensureTodayWorkday().
+
+// ════════════════════════════════════════════
+// [Phase HR1a] Role Permissions Helper
+// ════════════════════════════════════════════
+// Centralized permission keys for the new HR module. Dotted hierarchical keys.
+// NOT yet used to refactor the existing 35+ inline `CU.role==='admin'||...` checks
+// — those will migrate at the call sites in HR1b–HR1h. For HR1a, this helper drives
+// new role dashboards (head_nurse, hr_manager) and is exposed to future phases.
+//
+// Permission keys (additive · grow over phases):
+//   - cases.view.allBranches / cases.view.ownBranch / cases.view.own / cases.view.assigned
+//   - cases.edit.allBranches / cases.edit.ownBranch / cases.edit.own
+//   - staff.manage / staff.view
+//   - users.manage
+//   - treasury.view.all / treasury.view.branch / treasury.edit
+//   - finance.view / finance.edit
+//   - hr.attendance.view.all / hr.attendance.view.branch / hr.attendance.view.own
+//   - hr.attendance.clockin / hr.attendance.approve
+//   - hr.shifts.schedule / hr.shifts.publish              [activated in HR1c]
+//   - hr.requests.create.self / hr.requests.review.all / hr.requests.review.nurses [HR1e]
+//   - reports.allBranches / reports.ownBranch / reports.own / reports.financial / reports.hr
+//   - assets.manage / catalog.manage / banks.manage
+const ROLE_PERMS = {
+  admin: new Set([
+    'cases.view.allBranches','cases.edit.allBranches',
+    'staff.manage','staff.view','users.manage',
+    'treasury.view.all','treasury.edit','finance.view','finance.edit',
+    'hr.attendance.view.all','hr.attendance.clockin','hr.attendance.approve',
+    'hr.shifts.schedule','hr.shifts.publish',
+    'hr.requests.create.self','hr.requests.review.all',
+    'reports.allBranches','reports.financial','reports.hr',
+    'assets.manage','catalog.manage','banks.manage'
+  ]),
+  manager: new Set([
+    'cases.view.ownBranch','cases.edit.ownBranch',
+    'staff.view','treasury.view.branch',
+    'hr.attendance.view.branch','hr.attendance.clockin',
+    'hr.requests.create.self',
+    'reports.ownBranch','assets.manage'
+  ]),
+  head_nurse: new Set([
+    'cases.view.ownBranch',
+    'staff.view','hr.attendance.view.branch','hr.attendance.clockin',
+    'hr.shifts.schedule.ownBranch',
+    'hr.requests.create.self','hr.requests.review.nurses',
+    'reports.ownBranch'
+  ]),
+  hr_manager: new Set([
+    'staff.manage','staff.view','users.manage',
+    'hr.attendance.view.all','hr.attendance.clockin','hr.attendance.approve',
+    'hr.requests.create.self','hr.requests.review.all',
+    'reports.hr'
+  ]),
+  nurse: new Set([
+    'cases.view.own','cases.edit.own',
+    'hr.attendance.view.own','hr.attendance.clockin',
+    'hr.requests.create.self',
+    'reports.own'
+  ]),
+  doctor: new Set([
+    'cases.view.assigned',
+    'hr.attendance.view.own','hr.attendance.clockin',
+    'hr.requests.create.self',
+    'reports.own'
+  ]),
+  reception: new Set([
+    'cases.view.ownBranch','cases.edit.ownBranch',
+    'treasury.view.branch','treasury.edit','finance.view',
+    'hr.attendance.view.branch','hr.attendance.clockin',
+    'hr.requests.create.self',
+    'reports.ownBranch'
+  ]),
+  lab: new Set([
+    'hr.attendance.view.own','hr.attendance.clockin',
+    'hr.requests.create.self'
+  ]),
+  driver: new Set([
+    'hr.attendance.view.own','hr.attendance.clockin',
+    'hr.requests.create.self'
+  ]),
+  accountant: new Set([
+    'finance.view','finance.edit','treasury.view.all','treasury.edit',
+    'banks.manage','reports.financial',
+    'hr.attendance.view.own','hr.attendance.clockin',
+    'hr.requests.create.self'
+  ]),
+};
+function getPerms(role){ return ROLE_PERMS[role] || ROLE_PERMS.nurse; }
+function hasPerm(key){
+  if(typeof CU==='undefined' || !CU || !CU.role) return false;
+  return getPerms(CU.role).has(key);
+}
+window.getPerms = getPerms;
+window.hasPerm = hasPerm;
+window.ROLE_PERMS = ROLE_PERMS;
+
 function buildSB(){
   document.getElementById('sbAv').textContent=CU.name.charAt(0);
   // [Session #7 Phase D] Sync the mobile-only avatar in topbar.
   if(typeof updateMobileAvatar==='function') updateMobileAvatar();
   document.getElementById('sbName').textContent=CU.name;
-  document.getElementById('sbRole').textContent={admin:'Administrator',reception:'Receptionist',manager:'Branch Manager',nurse:'Clinic Nurse'}[CU.role]||CU.role;
+  // [Phase HR1a] Extended role label map — adds doctor/head_nurse/hr_manager/lab/driver/accountant
+  document.getElementById('sbRole').textContent={admin:'Administrator',manager:'Branch Manager',head_nurse:'Head Nurse',hr_manager:'HR Manager',nurse:'Clinic Nurse',doctor:'Doctor',reception:'Receptionist',lab:'Lab Technician',driver:'Driver',accountant:'Accountant'}[CU.role]||CU.role;
   document.getElementById('sbBranch').textContent=CU.branch==='all'?'All Branches':getBr(CU.branch).nameAr;
   const items=NAV[CU.role]||NAV.nurse;
   document.getElementById('sbNav').innerHTML=items.map(it=>`<div class="ni" id="ni-${it.id}" onclick="nav('${it.id}')"><span class="ni-ico">${it.ico}</span><span class="ni-en">${it.en}</span><span class="ni-ar" style="display:none;font-family:'Tajawal',sans-serif">${it.ar}</span></div>`).join('');
@@ -4557,7 +4661,112 @@ function renderDash(){
   const isCenterAdmin=(CU.role==='admin'||CU.role==='reception'||CU.role==='manager')&&(CU.branch==='all'||isMain);
   if(isMain||(CU.role==='manager'&&isMain)) return renderCenterDash(CU.branch==='all'?'kawther':CU.branch);
   if(CU.role==='admin'||CU.role==='reception') return renderAdminDash();
+  // [Phase HR1a] Route new HR roles to their own dashboards
+  if(CU.role==='head_nurse') return renderHeadNurseDash();
+  if(CU.role==='hr_manager') return renderHRManagerDash();
+  if(CU.role==='lab'||CU.role==='driver'||CU.role==='accountant'||CU.role==='doctor') return renderRolePlaceholderDash();
   return renderClinicDash();
+}
+
+// [Phase HR1a] Head Nurse dashboard — branch-scoped overview using existing data sources.
+// Schedule (HR1c) and Nurse Requests (HR1e) shown as "coming soon" until those phases ship.
+function renderHeadNurseDash(){
+  const branch = CU.branch || '';
+  const today = new Date().toISOString().split('T')[0];
+  const wds = (typeof getWorkdays==='function'?getWorkdays():[]);
+  const cases = (typeof getCases==='function'?getCases():[]);
+  const liveToday = wds.filter(w => w.date===today && !w.checkedOutAt && (!branch || w.branch===branch));
+  const myNurses = (typeof getStaff==='function'?getStaff():[])
+    .filter(s => s.role==='Nurse' && (!branch || s.branch===branch) && s.status==='Active');
+  const todayCases = cases.filter(c => {
+    const d = (typeof getCaseDateIn==='function')?getCaseDateIn(c):c.kaDate;
+    return d===today && (!branch || c.branch===branch || c.treatedAt===branch);
+  });
+  return `
+  <div class="card" style="margin-bottom:14px;padding:16px">
+    <div style="font-size:18px;font-weight:700">🩺 Head Nurse — ${getBr(branch).name||'Your Branch'}</div>
+    <div style="font-size:12px;color:var(--g500);margin-top:4px">Branch attendance + nurse roster overview.</div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:12px;margin-bottom:14px">
+    <div class="card" style="padding:14px"><div style="font-size:11px;color:var(--g500);text-transform:uppercase">Live Today</div><div style="font-size:32px;font-weight:700">${liveToday.length}</div><div style="font-size:11px;color:var(--g500)">staff working now</div></div>
+    <div class="card" style="padding:14px"><div style="font-size:11px;color:var(--g500);text-transform:uppercase">My Nurses</div><div style="font-size:32px;font-weight:700">${myNurses.length}</div><div style="font-size:11px;color:var(--g500)">active in this branch</div></div>
+    <div class="card" style="padding:14px"><div style="font-size:11px;color:var(--g500);text-transform:uppercase">Today's Cases</div><div style="font-size:32px;font-weight:700">${todayCases.length}</div><div style="font-size:11px;color:var(--g500)">opened today</div></div>
+  </div>
+  <div class="card" style="padding:14px;margin-bottom:14px;background:#fef3c7;border-color:#fbbf24">
+    <div style="font-weight:700;color:#92400e">📅 Shift Scheduling — coming in HR1c</div>
+    <div style="font-size:12px;color:#92400e;margin-top:4px">Drag-drop roster planner for the next 7-30 days will be added in the Shift Scheduling phase.</div>
+  </div>
+  <div class="card" style="padding:14px;margin-bottom:14px;background:#dbeafe;border-color:#60a5fa">
+    <div style="font-weight:700;color:#1e3a8a">📝 Nurse Leave / Sick / Swap Requests — coming in HR1e</div>
+    <div style="font-size:12px;color:#1e3a8a;margin-top:4px">Approve/reject requests from your nurses. UI ships in the HR Requests phase.</div>
+  </div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap">
+    <button class="btn bp" onclick="nav('shifts')">📅 View Attendance</button>
+    <button class="btn bs" onclick="nav('staff')">👥 View My Nurses</button>
+    <button class="btn bs" onclick="nav('cases')">📋 View Cases</button>
+  </div>
+  `;
+}
+
+// [Phase HR1a] HR Manager dashboard — cross-branch HR overview.
+// Read-only stats from existing tables. HR Requests (HR1e), Late/Absent (HR1g), Payroll (HR2)
+// shown as placeholders until those phases ship.
+function renderHRManagerDash(){
+  const today = new Date().toISOString().split('T')[0];
+  const month = today.substring(0,7);
+  const wds = (typeof getWorkdays==='function'?getWorkdays():[]);
+  const staff = (typeof getStaff==='function'?getStaff():[]);
+  const usersAll = (typeof getUsers==='function'?getUsers():[]);
+  const liveToday = wds.filter(w => w.date===today && !w.checkedOutAt);
+  const monthDays = wds.filter(w => w.date && w.date.startsWith(month));
+  const activeStaff = staff.filter(s => s.status==='Active');
+  const activeUsers = usersAll.filter(u => u.active !== false);
+  return `
+  <div class="card" style="margin-bottom:14px;padding:16px">
+    <div style="font-size:18px;font-weight:700">👤 HR Dashboard</div>
+    <div style="font-size:12px;color:var(--g500);margin-top:4px">Cross-branch staff + attendance overview.</div>
+  </div>
+  <div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(200px,1fr));gap:12px;margin-bottom:14px">
+    <div class="card" style="padding:14px"><div style="font-size:11px;color:var(--g500);text-transform:uppercase">Working Now</div><div style="font-size:32px;font-weight:700">${liveToday.length}</div><div style="font-size:11px;color:var(--g500)">across all branches</div></div>
+    <div class="card" style="padding:14px"><div style="font-size:11px;color:var(--g500);text-transform:uppercase">Active Staff</div><div style="font-size:32px;font-weight:700">${activeStaff.length}</div><div style="font-size:11px;color:var(--g500)">on payroll</div></div>
+    <div class="card" style="padding:14px"><div style="font-size:11px;color:var(--g500);text-transform:uppercase">User Accounts</div><div style="font-size:32px;font-weight:700">${activeUsers.length}</div><div style="font-size:11px;color:var(--g500)">active logins</div></div>
+    <div class="card" style="padding:14px"><div style="font-size:11px;color:var(--g500);text-transform:uppercase">Workdays This Month</div><div style="font-size:32px;font-weight:700">${monthDays.length}</div><div style="font-size:11px;color:var(--g500)">attendance entries</div></div>
+  </div>
+  <div class="card" style="padding:14px;margin-bottom:14px;background:#dbeafe;border-color:#60a5fa">
+    <div style="font-weight:700;color:#1e3a8a">📝 Pending HR Requests — coming in HR1e</div>
+    <div style="font-size:12px;color:#1e3a8a;margin-top:4px">Leave / Sick / Salary Advance / Penalty / Bonus / Shift Swap approval workflow.</div>
+  </div>
+  <div class="card" style="padding:14px;margin-bottom:14px;background:#fef3c7;border-color:#fbbf24">
+    <div style="font-weight:700;color:#92400e">⏰ Late / Absent Detection — coming in HR1g</div>
+    <div style="font-size:12px;color:#92400e;margin-top:4px">Cross-branch view + automatic late/absent flagging based on shift schedule.</div>
+  </div>
+  <div class="card" style="padding:14px;margin-bottom:14px;background:#e9d5ff;border-color:#a78bfa">
+    <div style="font-weight:700;color:#5b21b6">💵 Payroll Events — coming in HR2</div>
+    <div style="font-size:12px;color:#5b21b6;margin-top:4px">Salary advances · penalties · bonuses linked to Treasury entries.</div>
+  </div>
+  <div style="display:flex;gap:10px;flex-wrap:wrap">
+    <button class="btn bp" onclick="nav('staff')">👥 Manage Staff</button>
+    <button class="btn bs" onclick="nav('users')">🔐 User Accounts</button>
+    <button class="btn bs" onclick="nav('shifts')">📅 Attendance Records</button>
+    <button class="btn bs" onclick="nav('reports')">📈 HR Reports</button>
+  </div>
+  `;
+}
+
+// [Phase HR1a] Minimal placeholder dashboard for lab / driver / accountant / doctor roles.
+// Each role's full features ship in HR1b (clock-in) + HR1d (attendance) + HR1e (requests) + later phases.
+function renderRolePlaceholderDash(){
+  const roleLabels = {lab:'Lab Technician',driver:'Driver',accountant:'Accountant',doctor:'Doctor'};
+  const label = roleLabels[CU.role] || CU.role;
+  return `
+  <div class="card" style="padding:24px;text-align:center">
+    <div style="font-size:42px;margin-bottom:10px">👋</div>
+    <div style="font-size:20px;font-weight:700;margin-bottom:6px">Welcome, ${CU.name}</div>
+    <div style="font-size:13px;color:var(--g500);margin-bottom:16px">Role: ${label} · Branch: ${CU.branch==='all'?'All':getBr(CU.branch).name||CU.branch}</div>
+    <div style="font-size:12px;color:var(--g600);max-width:480px;margin:0 auto">Your role-specific dashboard is being built. For now, use the sidebar to access available features. Clock-in, requests, and your task views will be added in upcoming phases (HR1b/c/d/e).</div>
+    <div style="margin-top:18px"><button class="btn bp" onclick="nav('shifts')">📅 My Attendance</button></div>
+  </div>
+  `;
 }
 
 function renderAdminDash(){
