@@ -5265,22 +5265,72 @@ function renderClinicDash(){
   ${(function(){
     // [Session #5 WORKDAY] Replace shift banner with workday banner. No "start shift" concept —
     // attendance is automatic. Banner shows clock-in, hours so far, and the doctor-on-duty chip.
+    // [Phase HR1b.2] Extended to 6 states with explicit Clock In Now button + GPS approval indicator.
+    // I1: once-per-day idempotency. Y1: yellow auto-checkin warning. D1: inline disclosure (no modal).
     const wd = getTodayWorkday();
+    // [Phase HR1b.2] Inline button styles — B1 decision (no global CSS change).
+    const clockInBtnHTML = '<button class="sbtn" onclick="clockInNow()" style="background:#10b981;color:#fff;font-weight:700;border:none">📍 Clock In Now</button>';
     if(!wd){
-      // Edge case: user somehow landed here without a workday row. Just prompt silent check-in.
-      return '<div class="sb-banner"><div><div class="sb-st">📅 Welcome</div><div class="sb-ss">Your attendance will be logged automatically.</div></div><div class="sb-btns"></div></div>';
+      // Edge case: user somehow landed here without a workday row. Show explicit Clock In button.
+      return '<div class="sb-banner"><div>'+
+        '<div class="sb-st">📅 Welcome</div>'+
+        '<div class="sb-ss">Tap Clock In to start your day · Your location is captured once for verification — not tracked continuously.</div>'+
+        '</div><div class="sb-btns">'+clockInBtnHTML+'</div></div>';
     }
     const h = workdayHours(wd);
     const hMin = Math.round((h.hours%1)*60);
     const hStr = Math.floor(h.hours)+'h '+(hMin<10?'0':'')+hMin+'m';
     const checkedOut = !!wd.checkedOutAt;
     const docLabel = wd.doctorName ? ('👨‍⚕️ '+wd.doctorName) : '⚠️ No doctor set';
-    return '<div class="sb-banner"'+(checkedOut?' style="background:linear-gradient(135deg,#64748b,#475569)"':'')+'>'+
+    // [Phase HR1b.2] Derive new state flags from extended workday columns
+    const hasExplicit = !!wd.clockInExplicitAt;
+    const inRadius = wd.clockInInRadius === true;
+    const isPending = wd.clockInApprovalStatus === 'pending';
+    const isApproved = wd.clockInApprovalStatus === 'approved';
+    const branchName = getBr(wd.branch).name||'Working';
+    // [Phase HR1b.2] Banner background color per state — yellow for auto-checkin warning (Y1)
+    let bannerBg = '';
+    if(checkedOut){
+      bannerBg = ' style="background:linear-gradient(135deg,#64748b,#475569)"';
+    } else if(!hasExplicit){
+      // Y1: yellow tint to make the "please confirm with Clock In" call-to-action prominent
+      bannerBg = ' style="background:linear-gradient(135deg,#b45309,#d97706)"';
+    }
+    // [Phase HR1b.2] Top-line label by state
+    let topLine;
+    if(checkedOut){
+      topLine = '⏹ Day Ended';
+    } else if(!hasExplicit){
+      topLine = '🟡 '+branchName+' · auto-checkin · please confirm with Clock In';
+    } else if(inRadius){
+      topLine = '🟢 '+branchName+' · 📍 In radius';
+    } else if(isPending){
+      topLine = '🟢 '+branchName+' · 🟡 Pending review';
+    } else if(isApproved){
+      topLine = '🟢 '+branchName+' · ✅ Approved';
+    } else {
+      topLine = '🟢 '+branchName;
+    }
+    // [Phase HR1b.2] Sub-line — adds reason snippet for pending state, disclosure for auto-checkin
+    let subLine;
+    if(!hasExplicit && !checkedOut){
+      subLine = 'Clock-in (auto): '+new Date(wd.firstLogin).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})+' · '+hStr+' · '+(wd.caseCount||0)+' cases · Your location is captured once for verification — not tracked continuously.';
+    } else {
+      const explicitTime = hasExplicit
+        ? new Date(wd.clockInExplicitAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})
+        : new Date(wd.firstLogin).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+      const reasonSnippet = (isPending && wd.clockInReason) ? ' · '+wd.clockInReason.substring(0,60) : '';
+      subLine = 'Clock-in: '+explicitTime+' · '+hStr+(h.overtime>0?' (⚡ +'+h.overtime+'h OT)':'')+' · '+(wd.caseCount||0)+' cases'+reasonSnippet;
+    }
+    // [Phase HR1b.2] Buttons — Clock In Now appears only when not yet explicit AND not checked out
+    const showClockIn = !hasExplicit && !checkedOut;
+    return '<div class="sb-banner"'+bannerBg+'>'+
       '<div>'+
-        '<div class="sb-st">'+(checkedOut?'⏹ Day Ended':'🟢 '+(getBr(wd.branch).name||'Working'))+'</div>'+
-        '<div class="sb-ss">Clock-in: '+new Date(wd.firstLogin).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'})+' · '+hStr+(h.overtime>0?' (⚡ +'+h.overtime+'h OT)':'')+' · '+(wd.caseCount||0)+' cases</div>'+
+        '<div class="sb-st">'+topLine+'</div>'+
+        '<div class="sb-ss">'+subLine+'</div>'+
       '</div>'+
       '<div class="sb-btns">'+
+        (showClockIn ? clockInBtnHTML : '')+
         '<button class="sbtn sbtn-tr" onclick="openDoctorPicker()">'+docLabel+' ✎</button>'+
         (checkedOut?'':'<button class="sbtn sbtn-end" onclick="endMyDay()">⏹ End My Day</button>')+
       '</div>'+
@@ -8508,6 +8558,113 @@ function resumeMyWorkday(){
   }
 }
 window.resumeMyWorkday = resumeMyWorkday;
+
+// ════════════════════════════════════════════
+// [Phase HR1b.2] Explicit Clock-In flow
+// ════════════════════════════════════════════
+// Captures GPS, evaluates branch geofence (if configured), updates today's workday with
+// clock_in_lat/lng/accuracy_m/in_radius/reason/device_info/approval_status/explicit_at.
+// Auto-pushes to Supabase via existing saveWorkdays → pushWorkday → toSnake('workdays')
+// pipeline (HR1b.1 already extended COLS.workdays with the new columns).
+//
+// Behavior matrix:
+//   - In radius                → approval_status='auto', inRadius=true,  reason=null
+//   - Out of radius            → reason prompt → approval_status='pending', inRadius=false
+//   - No geofence configured   → reason='No geofence configured for this branch', approval_status='pending'
+//   - Permission denied/error  → reason prompt → approval_status='pending', inRadius=null
+//   - Idempotent re-tap        → toast "already clocked in" + return (no GPS re-prompt, no overwrite)
+//
+// Per HR1b.2 decisions: I1 (once-per-day), Y1 (yellow auto-checkin warning), D1 (no modal disclosure),
+// E1 carry-over (nurse-only via isWorkdayTrackedUser).
+async function clockInNow(){
+  if(typeof CU==='undefined' || !CU){
+    if(typeof toast==='function') toast('Not logged in','err');
+    return;
+  }
+  if(typeof isWorkdayTrackedUser==='function' && !isWorkdayTrackedUser()){
+    if(typeof toast==='function') toast('Workday not tracked for your role','warn');
+    return;
+  }
+  // Ensure workday row exists (idempotent · preserves existing auto-checkin behavior)
+  const wd = ensureTodayWorkday();
+  if(!wd){
+    if(typeof toast==='function') toast('Failed to prepare workday','err');
+    return;
+  }
+  // Idempotent (I1): if already explicitly clocked in today, just inform and exit · no GPS re-prompt
+  if(wd.clockInExplicitAt){
+    const tStr = new Date(wd.clockInExplicitAt).toLocaleTimeString('en-GB',{hour:'2-digit',minute:'2-digit'});
+    if(typeof toast==='function') toast('Already clocked in at '+tStr,'ok');
+    return;
+  }
+  // Look up this branch's geofence (HR1b.1 cache · may be null when not configured)
+  const geo = (typeof getBranchGeofence==='function') ? getBranchGeofence(CU.branch) : null;
+  // Capture GPS · single read · resolves with {lat,lng,accuracy} or rejects with {code,message}
+  let result = {lat:null, lng:null, accuracy:null, inRadius:null, reason:null, status:'auto'};
+  try {
+    const pos = await hmcGetLocation(8000);
+    result.lat = pos.lat;
+    result.lng = pos.lng;
+    result.accuracy = pos.accuracy;
+    if(geo && typeof geo.lat==='number' && typeof geo.lng==='number'){
+      const radius = (geo.radiusM || 150);
+      const dist = haversineMeters(pos.lat, pos.lng, geo.lat, geo.lng);
+      // Generous: GPS accuracy widens the allowed circle
+      result.inRadius = dist <= (radius + (pos.accuracy||0));
+      if(!result.inRadius){
+        const branchName = (typeof getBr==='function' ? getBr(CU.branch).name : CU.branch) || 'the clinic';
+        const reason = prompt('⚠ You are '+Math.round(dist)+'m from '+branchName+' (allowed: '+radius+'m).\n\nReason for clocking in remotely:');
+        if(!reason || !reason.trim()){
+          if(typeof toast==='function') toast('Clock-in cancelled','warn');
+          return;
+        }
+        result.reason = reason.trim().substring(0,400);
+        result.status = 'pending';
+      }
+    } else {
+      // No geofence configured for this branch — record GPS but mark pending (admin should configure in HR1b.3)
+      result.reason = 'No geofence configured for this branch';
+      result.status = 'pending';
+    }
+  } catch(err){
+    // Permission denied / unavailable / timeout
+    const codeLabel = (err && err.code) ? err.code : 'error';
+    const reason = prompt('Location not available ('+codeLabel+').\n\nReason for clock-in without GPS:');
+    if(!reason || !reason.trim()){
+      if(typeof toast==='function') toast('Clock-in cancelled','warn');
+      return;
+    }
+    result.reason = reason.trim().substring(0,400);
+    result.status = 'pending';
+  }
+  // Persist to localStorage + auto-push to Supabase
+  const wds = getWorkdays();
+  const idx = wds.findIndex(function(w){ return w.id===wd.id; });
+  if(idx<0) return;
+  const nowISO = new Date().toISOString();
+  wds[idx].clockInLat = result.lat;
+  wds[idx].clockInLng = result.lng;
+  wds[idx].clockInAccuracyM = result.accuracy;
+  wds[idx].clockInInRadius = result.inRadius;
+  wds[idx].clockInReason = result.reason;
+  wds[idx].clockInApprovalStatus = result.status;
+  wds[idx].clockInExplicitAt = nowISO;
+  wds[idx].clockInDeviceInfo = ((navigator.userAgent||'').substring(0,80) + '|' + ((window.screen && (window.screen.width+'x'+window.screen.height)) || '')).substring(0,100);
+  saveWorkdays(wds);  // auto-pushes via pushWorkday → toSnake('workdays')
+  // Audit
+  try {
+    if(typeof logAccess==='function') logAccess('hr.clockin', wd.id, JSON.stringify({inRadius:result.inRadius, status:result.status, accuracy:result.accuracy}));
+  } catch(e){}
+  // UI feedback
+  if(result.status==='auto' && result.inRadius){
+    if(typeof toast==='function') toast('✅ Clocked in (in radius)','ok');
+  } else if(result.status==='pending'){
+    if(typeof toast==='function') toast('⏳ Clock-in submitted for admin approval — '+(result.reason||'').substring(0,40),'warn');
+  }
+  // Refresh dashboard so banner reflects new state
+  if(typeof nav==='function' && PAGE==='dashboard') nav('dashboard');
+}
+window.clockInNow = clockInNow;
 
 // ── Doctor picker: small inline dialog to set/change today's doctor ──
 function openDoctorPicker(){
