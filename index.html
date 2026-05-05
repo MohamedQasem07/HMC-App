@@ -4775,6 +4775,7 @@ function renderHeadNurseDash(){
     <div class="card" style="padding:14px"><div style="font-size:11px;color:var(--g500);text-transform:uppercase">My Nurses</div><div style="font-size:32px;font-weight:700">${myNurses.length}</div><div style="font-size:11px;color:var(--g500)">active in this branch</div></div>
     <div class="card" style="padding:14px"><div style="font-size:11px;color:var(--g500);text-transform:uppercase">Today's Cases</div><div style="font-size:32px;font-weight:700">${todayCases.length}</div><div style="font-size:11px;color:var(--g500)">opened today</div></div>
   </div>
+  ${/* [Phase HR1b.3] Pending Clock-In Approvals · branch-scoped (head nurse sees only own branch) */ renderPendingClockInsCard(branch||'all')}
   <div class="card" style="padding:14px;margin-bottom:14px;background:#fef3c7;border-color:#fbbf24">
     <div style="font-weight:700;color:#92400e">📅 Shift Scheduling — coming in HR1c</div>
     <div style="font-size:12px;color:#92400e;margin-top:4px">Drag-drop roster planner for the next 7-30 days will be added in the Shift Scheduling phase.</div>
@@ -4815,6 +4816,7 @@ function renderHRManagerDash(){
     <div class="card" style="padding:14px"><div style="font-size:11px;color:var(--g500);text-transform:uppercase">User Accounts</div><div style="font-size:32px;font-weight:700">${activeUsers.length}</div><div style="font-size:11px;color:var(--g500)">active logins</div></div>
     <div class="card" style="padding:14px"><div style="font-size:11px;color:var(--g500);text-transform:uppercase">Workdays This Month</div><div style="font-size:32px;font-weight:700">${monthDays.length}</div><div style="font-size:11px;color:var(--g500)">attendance entries</div></div>
   </div>
+  ${/* [Phase HR1b.3] Pending Clock-In Approvals · cross-branch (scope='all') */ renderPendingClockInsCard('all')}
   <div class="card" style="padding:14px;margin-bottom:14px;background:#dbeafe;border-color:#60a5fa">
     <div style="font-weight:700;color:#1e3a8a">📝 Pending HR Requests — coming in HR1e</div>
     <div style="font-size:12px;color:#1e3a8a;margin-top:4px">Leave / Sick / Salary Advance / Penalty / Bonus / Shift Swap approval workflow.</div>
@@ -4851,6 +4853,201 @@ function renderRolePlaceholderDash(){
   </div>
   `;
 }
+
+// ════════════════════════════════════════════
+// [Phase HR1b.3] Admin Geofence Config + Pending Clock-In Approvals
+// ════════════════════════════════════════════
+// Geofence card (admin Settings only · P1 decision · stable ID `BG-{branch_id}` per F1).
+// Pending clock-ins panel (HR Manager + Head Nurse dashboards · branch-scoped for head_nurse).
+// Light Approve/Reject inline buttons (S2 decision · uses HR1b.1 schema fields directly).
+// Reuses HR1b.1 helpers: getBranchGeofences/saveBranchGeofences/getBranchGeofence/hmcGetLocation.
+// No DDL · no schema change · no RLS change.
+
+// Renders the geofence config card for the Settings page (admin).
+function renderGeofenceConfigCard(){
+  const all = getBranchGeofences();
+  const byBranch = {};
+  all.forEach(function(g){ byBranch[g.branchId] = g; });
+  const configuredCount = BRANCHES.filter(function(b){ const g=byBranch[b.id]; return g && typeof g.lat==='number' && typeof g.lng==='number'; }).length;
+  const rows = BRANCHES.map(function(b){
+    const g = byBranch[b.id] || {};
+    const lat = (typeof g.lat==='number') ? g.lat : '';
+    const lng = (typeof g.lng==='number') ? g.lng : '';
+    const radius = g.radiusM || 150;
+    const active = g.active !== false;
+    const notes = (g.notes||'').replace(/"/g,'&quot;');
+    const updated = g.updatedAt ? new Date(g.updatedAt).toLocaleString('en-GB',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
+    const updatedBy = g.createdBy || '—';
+    return '<tr data-branch="'+b.id+'">'+
+      '<td style="padding:8px 6px;font-weight:600">'+b.name+'<div style="font-size:10px;color:var(--g500)">'+b.id+'</div></td>'+
+      '<td><input class="fsi" id="gf_lat_'+b.id+'" type="number" step="0.000001" value="'+lat+'" style="width:130px" placeholder="lat"></td>'+
+      '<td><input class="fsi" id="gf_lng_'+b.id+'" type="number" step="0.000001" value="'+lng+'" style="width:130px" placeholder="lng"></td>'+
+      '<td><input class="fsi" id="gf_rad_'+b.id+'" type="number" step="10" min="50" max="1000" value="'+radius+'" style="width:80px"> m</td>'+
+      '<td><input type="checkbox" id="gf_act_'+b.id+'"'+(active?' checked':'')+'></td>'+
+      '<td><input class="fsi" id="gf_notes_'+b.id+'" type="text" value="'+notes+'" style="width:160px" placeholder="optional notes"></td>'+
+      '<td style="font-size:10px;color:var(--g500)">'+updated+'<br>'+updatedBy+'</td>'+
+      '<td style="white-space:nowrap">'+
+        '<button class="btn bs btn-sm" onclick="useCurrentLocationForGeofence(\''+b.id+'\')" style="font-size:11px">📍 Use Current</button>'+
+        '<button class="btn bp btn-sm" onclick="saveGeofenceConfig(\''+b.id+'\')" style="font-size:11px;margin-left:4px">💾 Save</button>'+
+      '</td>'+
+      '</tr>';
+  }).join('');
+  return '<div class="card" style="margin-bottom:14px">'+
+    '<div class="ch"><div class="ct">📍 Branch Geofence Configuration</div>'+
+    '<span style="font-size:11px;color:var(--g500)">Set lat/lng/radius per branch · Currently configured: '+configuredCount+'/'+BRANCHES.length+'</span></div>'+
+    '<div style="font-size:11px;color:var(--g600);margin-bottom:8px">Tap "📍 Use Current" while physically standing at the clinic to capture GPS into the inputs. Then tap "💾 Save". Until configured, all clock-ins from that branch fall through to "Pending review · No geofence configured".</div>'+
+    '<div class="tw"><table style="width:100%;font-size:12px"><thead><tr style="background:var(--g50)">'+
+    '<th style="text-align:left;padding:6px 4px">Branch</th><th>Latitude</th><th>Longitude</th><th>Radius</th><th>Active</th><th>Notes</th><th>Last update</th><th></th>'+
+    '</tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    '</div>';
+}
+
+// Captures current GPS and populates lat/lng inputs for the given branch.
+async function useCurrentLocationForGeofence(branchId){
+  if(!branchId) return;
+  if(typeof toast==='function') toast('Capturing GPS...','warn');
+  try {
+    const pos = await hmcGetLocation(8000);
+    const latEl = document.getElementById('gf_lat_'+branchId);
+    const lngEl = document.getElementById('gf_lng_'+branchId);
+    if(latEl) latEl.value = pos.lat.toFixed(6);
+    if(lngEl) lngEl.value = pos.lng.toFixed(6);
+    if(typeof toast==='function') toast('✅ Captured GPS (accuracy ±'+Math.round(pos.accuracy||0)+'m) — review and Save','ok');
+  } catch(err){
+    const code = (err && err.code) ? err.code : 'error';
+    if(typeof toast==='function') toast('❌ GPS failed: '+code+' — enter coordinates manually','err');
+  }
+}
+window.useCurrentLocationForGeofence = useCurrentLocationForGeofence;
+
+// Validates inputs · upserts to public.branch_geofence via merge-duplicates · refreshes cache + page.
+async function saveGeofenceConfig(branchId){
+  if(!branchId) return;
+  const latStr = (document.getElementById('gf_lat_'+branchId)?.value||'').trim();
+  const lngStr = (document.getElementById('gf_lng_'+branchId)?.value||'').trim();
+  const radStr = (document.getElementById('gf_rad_'+branchId)?.value||'').trim();
+  const active = !!document.getElementById('gf_act_'+branchId)?.checked;
+  const notes = (document.getElementById('gf_notes_'+branchId)?.value||'').trim().substring(0,400);
+  const lat = parseFloat(latStr);
+  const lng = parseFloat(lngStr);
+  const radius = parseInt(radStr,10);
+  if(latStr && (isNaN(lat) || lat < -90 || lat > 90)){
+    if(typeof toast==='function') toast('Invalid latitude (-90..90)','err'); return;
+  }
+  if(lngStr && (isNaN(lng) || lng < -180 || lng > 180)){
+    if(typeof toast==='function') toast('Invalid longitude (-180..180)','err'); return;
+  }
+  if(isNaN(radius) || radius < 50 || radius > 1000){
+    if(typeof toast==='function') toast('Invalid radius (50..1000m)','err'); return;
+  }
+  const id = 'BG-'+branchId;  // F1 decision · stable ID
+  const nowISO = new Date().toISOString();
+  const row = {
+    id: id, branchId: branchId,
+    lat: latStr ? lat : null,
+    lng: lngStr ? lng : null,
+    radiusM: radius,
+    active: active,
+    notes: notes || null,
+    createdBy: (typeof CU!=='undefined' && CU) ? CU.id : null,
+    updatedAt: nowISO
+  };
+  // Optimistic local cache update
+  const all = getBranchGeofences();
+  const idx = all.findIndex(function(g){ return g.id===id || g.branchId===branchId; });
+  if(idx >= 0) all[idx] = Object.assign({}, all[idx], row);
+  else all.push(Object.assign({createdAt: nowISO}, row));
+  saveBranchGeofences(all);
+  // Push to Supabase via merge-duplicates upsert
+  try {
+    const r = await sbAPI('POST', 'branch_geofence', toSnake(row, 'branch_geofence'));
+    if(r === null){
+      if(typeof toast==='function') toast('⚠ Saved locally · Supabase sync deferred','warn');
+    } else {
+      if(typeof toast==='function') toast('✅ Geofence saved for '+(getBr(branchId).name||branchId),'ok');
+    }
+  } catch(e){
+    if(typeof toast==='function') toast('⚠ Save partial — see console','warn');
+    console.warn('saveGeofenceConfig:', e);
+  }
+  if(typeof logAccess==='function') logAccess('hr.geofence.save', id, branchId+' '+(latStr||'-')+'/'+(lngStr||'-')+'/'+radius+'m');
+  if(typeof nav==='function' && PAGE==='settings') nav('settings');
+}
+window.saveGeofenceConfig = saveGeofenceConfig;
+
+// Renders the pending clock-ins panel · scope='all' (HR Manager) or branchId (Head Nurse).
+function renderPendingClockInsCard(scope){
+  const wds = getWorkdays();
+  const monthAgo = new Date(Date.now() - 30*86400000).toISOString().split('T')[0];
+  let pending = wds.filter(function(w){
+    return w.clockInApprovalStatus === 'pending' && w.date && w.date >= monthAgo;
+  });
+  if(scope && scope !== 'all') pending = pending.filter(function(w){ return w.branch === scope; });
+  pending.sort(function(a,b){ return (b.clockInExplicitAt||'').localeCompare(a.clockInExplicitAt||''); });
+  pending = pending.slice(0, 30);
+  const scopeLabel = (scope && scope !== 'all') ? ' · '+(getBr(scope).name||scope) : '';
+  if(!pending.length){
+    return '<div class="card" style="padding:14px;margin-bottom:14px">'+
+      '<div class="ct">⏳ Pending Clock-In Approvals'+scopeLabel+'</div>'+
+      '<div style="font-size:12px;color:var(--g500);margin-top:4px">No pending approvals.</div>'+
+      '</div>';
+  }
+  const rows = pending.map(function(w){
+    const tStr = w.clockInExplicitAt ? new Date(w.clockInExplicitAt).toLocaleString('en-GB',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}) : '—';
+    const acc = (typeof w.clockInAccuracyM==='number') ? '±'+Math.round(w.clockInAccuracyM)+'m' : '—';
+    const inR = w.clockInInRadius===true ? '🟢' : (w.clockInInRadius===false ? '🔴' : '⚪');
+    const reason = (w.clockInReason||'—').substring(0,80).replace(/</g,'&lt;');
+    const dev = (w.clockInDeviceInfo||'—').substring(0,30).replace(/</g,'&lt;');
+    return '<tr>'+
+      '<td style="padding:6px 4px;font-weight:600">'+(w.staffName||'—')+'<div style="font-size:10px;color:var(--g500)">'+(w.role||'—')+'</div></td>'+
+      '<td><span class="bdg bb" style="font-size:10px">'+(getBr(w.branch).name||w.branch||'—')+'</span></td>'+
+      '<td style="font-size:11px">'+tStr+'</td>'+
+      '<td style="font-size:11px">'+inR+' '+acc+'</td>'+
+      '<td style="font-size:11px;max-width:240px">'+reason+'</td>'+
+      '<td style="font-size:10px;color:var(--g500);max-width:160px;overflow:hidden;text-overflow:ellipsis">'+dev+'</td>'+
+      '<td style="white-space:nowrap">'+
+        '<button class="btn bp btn-sm" onclick="approveClockIn(\''+w.id+'\')" style="font-size:11px">✅ Approve</button>'+
+        '<button class="btn brd btn-sm" onclick="rejectClockIn(\''+w.id+'\')" style="font-size:11px;margin-left:4px">✕ Reject</button>'+
+      '</td>'+
+      '</tr>';
+  }).join('');
+  return '<div class="card" style="margin-bottom:14px;padding:0">'+
+    '<div style="padding:12px 16px;display:flex;justify-content:space-between;align-items:center">'+
+    '<div class="ct">⏳ Pending Clock-In Approvals ('+pending.length+')'+scopeLabel+'</div>'+
+    '<span style="font-size:11px;color:var(--g500)">Last 30 days</span>'+
+    '</div>'+
+    '<div class="tw"><table style="width:100%;font-size:12px"><thead><tr style="background:var(--g50)">'+
+    '<th style="text-align:left;padding:6px 4px">Staff</th><th>Branch</th><th>Clock-in</th><th>GPS</th><th>Reason</th><th>Device</th><th></th>'+
+    '</tr></thead><tbody>'+rows+'</tbody></table></div>'+
+    '</div>';
+}
+
+// Approve or reject a pending clock-in · S2 decision (light · no notes/history workflow).
+function _hr1b3SetClockInApproval(workdayId, newStatus){
+  if(!workdayId) return;
+  if(newStatus !== 'approved' && newStatus !== 'rejected') return;
+  const wds = getWorkdays();
+  const idx = wds.findIndex(function(w){ return w.id===workdayId; });
+  if(idx < 0){
+    if(typeof toast==='function') toast('Workday not found','err'); return;
+  }
+  if(wds[idx].clockInApprovalStatus !== 'pending'){
+    if(typeof toast==='function') toast('Already '+(wds[idx].clockInApprovalStatus||'auto'),'warn');
+    return;
+  }
+  const nowISO = new Date().toISOString();
+  wds[idx].clockInApprovalStatus = newStatus;
+  wds[idx].clockInApprovedBy = (typeof CU!=='undefined' && CU) ? CU.id : null;
+  wds[idx].clockInApprovedAt = nowISO;
+  saveWorkdays(wds);  // auto-pushes via pushWorkday → toSnake('workdays')
+  if(typeof logAccess==='function') logAccess('hr.clockin.'+newStatus, workdayId, '');
+  if(typeof toast==='function') toast(newStatus==='approved' ? '✅ Clock-in approved' : '✕ Clock-in rejected','ok');
+  if(typeof nav==='function') nav(PAGE);
+}
+function approveClockIn(id){ if(confirm('Approve this clock-in?')) _hr1b3SetClockInApproval(id, 'approved'); }
+function rejectClockIn(id){ if(confirm('Reject this clock-in? The nurse will see status = rejected.')) _hr1b3SetClockInApproval(id, 'rejected'); }
+window.approveClockIn = approveClockIn;
+window.rejectClockIn = rejectClockIn;
 
 function renderAdminDash(){
   const all=getCases();
@@ -5283,25 +5480,33 @@ function renderClinicDash(){
     const checkedOut = !!wd.checkedOutAt;
     const docLabel = wd.doctorName ? ('👨‍⚕️ '+wd.doctorName) : '⚠️ No doctor set';
     // [Phase HR1b.2] Derive new state flags from extended workday columns
+    // [Phase HR1b.3] Added isRejected flag for the 7th banner state (R1 decision)
     const hasExplicit = !!wd.clockInExplicitAt;
     const inRadius = wd.clockInInRadius === true;
     const isPending = wd.clockInApprovalStatus === 'pending';
     const isApproved = wd.clockInApprovalStatus === 'approved';
+    const isRejected = wd.clockInApprovalStatus === 'rejected';
     const branchName = getBr(wd.branch).name||'Working';
     // [Phase HR1b.2] Banner background color per state — yellow for auto-checkin warning (Y1)
+    // [Phase HR1b.3] Red tint for rejected state (R1)
     let bannerBg = '';
     if(checkedOut){
       bannerBg = ' style="background:linear-gradient(135deg,#64748b,#475569)"';
+    } else if(isRejected){
+      bannerBg = ' style="background:linear-gradient(135deg,#b91c1c,#dc2626)"';
     } else if(!hasExplicit){
       // Y1: yellow tint to make the "please confirm with Clock In" call-to-action prominent
       bannerBg = ' style="background:linear-gradient(135deg,#b45309,#d97706)"';
     }
     // [Phase HR1b.2] Top-line label by state
+    // [Phase HR1b.3] Added 7th state: Rejected · contact admin (R1 decision)
     let topLine;
     if(checkedOut){
       topLine = '⏹ Day Ended';
     } else if(!hasExplicit){
       topLine = '🟡 '+branchName+' · auto-checkin · please confirm with Clock In';
+    } else if(isRejected){
+      topLine = '🔴 '+branchName+' · Rejected · contact admin';
     } else if(inRadius){
       topLine = '🟢 '+branchName+' · 📍 In radius';
     } else if(isPending){
@@ -15140,7 +15345,8 @@ function renderSettings(){
   <div style="display:grid;grid-template-columns:1fr 1fr;gap:14px">
     <div class="card"><div class="ch"><div class="ct">Users & Permissions</div></div><table style="width:100%;font-size:13px"><thead><tr><th style="text-align:left;padding:6px 0;font-size:11px;color:var(--g500)">Username</th><th>Role</th><th>Branch</th></tr></thead><tbody>${USERS.map(u=>`<tr><td style="padding:7px 0"><strong>${u.username}</strong><br><span style="font-size:11px;color:var(--g500)">${u.name}</span></td><td><span class="bdg ${u.role==='admin'?'bgo':u.role==='reception'?'bb':'bgr'}">${u.role}</span></td><td style="font-size:12px">${getBr(u.branch).name}</td></tr>`).join('')}</tbody></table></div>
     <div class="card"><div class="ch"><div class="ct">Branch Configuration</div></div>${BRANCHES.map(b=>`<div style="padding:9px 0;border-bottom:1px solid var(--g100)"><div style="font-size:13px;font-weight:500">${b.name}</div><div style="font-size:11px;color:var(--g500);margin-top:2px">${b.type==='main'?`🏥 Main · ${(b.rooms||[]).length} rooms${b.hasOR?' · OR':''}${b.hasLab?' · Lab':''}${b.hasCT?' · CT':''}${b.hasDental?' · Dental':''}`:` 🏨 External Clinic`}</div><div style="margin-top:3px">${b.fp?'<span class="bdg bg" style="font-size:10px">🖐 Fingerprint</span>':'<span class="bdg ba" style="font-size:10px">✏️ Manual</span>'}</div></div>`).join('')}</div>
-  </div>`;
+  </div>
+  ${/* [Phase HR1b.3] Admin Geofence Configuration card · admin-only via existing renderSettings gate */ renderGeofenceConfigCard()}`;
 }
 
 function doFullSync(){
