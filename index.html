@@ -2812,6 +2812,15 @@ function toSnake(obj, table) {
     firstLogin:'first_login', lastActivity:'last_activity',
     checkedOutAt:'checked_out_at', caseCount:'case_count',
     doctorOnDuty:'doctor_on_duty',
+    // [Phase HR1b.1] Branch geofence + workday clock-in/out GPS field mappings
+    branchId:'branch_id', radiusM:'radius_m',
+    clockInLat:'clock_in_lat', clockInLng:'clock_in_lng', clockInAccuracyM:'clock_in_accuracy_m',
+    clockInInRadius:'clock_in_in_radius', clockInReason:'clock_in_reason',
+    clockInDeviceInfo:'clock_in_device_info', clockInApprovalStatus:'clock_in_approval_status',
+    clockInApprovedBy:'clock_in_approved_by', clockInApprovedAt:'clock_in_approved_at',
+    clockInExplicitAt:'clock_in_explicit_at',
+    clockOutLat:'clock_out_lat', clockOutLng:'clock_out_lng', clockOutAccuracyM:'clock_out_accuracy_m',
+    clockOutInRadius:'clock_out_in_radius', clockOutReason:'clock_out_reason',
     // [Session #6] Access log field mappings
     userName:'user_name', targetId:'target_id', userAgent:'user_agent',
     // [Session #5] CRITICAL: medical report + nursing notes were being dropped before push.
@@ -2861,8 +2870,12 @@ function toSnake(obj, table) {
       // [Session #7 R3-#4] Center Room columns
       'center_room_no','center_room_assigned_at','center_room_assigned_by']),
     // [Session #5 WORKDAY] Workday schema — see SQL script in HANDOFF.md for CREATE TABLE
+    // [Phase HR1b.1] Extended with 15 GPS clock-in/out fields (all NULLable, additive)
     workdays: new Set(['id','user_id','staff_name','role','branch','date','doctor_name',
-      'first_login','last_activity','checked_out_at','case_count','created_at']),
+      'first_login','last_activity','checked_out_at','case_count','created_at',
+      'clock_in_lat','clock_in_lng','clock_in_accuracy_m','clock_in_in_radius','clock_in_reason',
+      'clock_in_device_info','clock_in_approval_status','clock_in_approved_by','clock_in_approved_at','clock_in_explicit_at',
+      'clock_out_lat','clock_out_lng','clock_out_accuracy_m','clock_out_in_radius','clock_out_reason']),
     // [Session #6] Access log — who did what, when. Admin/reception/main-branch audit trail.
     access_log: new Set(['id','user_id','user_name','role','branch','action','target_id',
       'details','timestamp','user_agent']),
@@ -2873,6 +2886,9 @@ function toSnake(obj, table) {
     // [Phase E1.1] Assets — fixed assets register per branch
     assets: new Set(['id','name','name_ar','category','serial','branch','purchase_date',
       'value','notes','status','added_by','created_at','transfer_log']),
+    // [Phase HR1b.1] Branch geofence — per-branch lat/lng/radius_m for clock-in validation
+    branch_geofence: new Set(['id','branch_id','lat','lng','radius_m','address','active','notes',
+      'created_by','created_at','updated_at']),
   };
   const DATE_COLS = new Set(['ka_date','dob','arrival_date','departure_date','discharge_date',
     'invoice_date','collection_date','start_date','created_at','updated_at']);
@@ -2953,6 +2969,15 @@ function parseSnakeCase(obj) {
     // [Session #7 H2] Insurance case log (negotiation timeline)
     entry_type:'entryType',
     case_id:'caseId',
+    // [Phase HR1b.1] Branch geofence + workday GPS reverse mappings
+    branch_id:'branchId', radius_m:'radiusM',
+    clock_in_lat:'clockInLat', clock_in_lng:'clockInLng', clock_in_accuracy_m:'clockInAccuracyM',
+    clock_in_in_radius:'clockInInRadius', clock_in_reason:'clockInReason',
+    clock_in_device_info:'clockInDeviceInfo', clock_in_approval_status:'clockInApprovalStatus',
+    clock_in_approved_by:'clockInApprovedBy', clock_in_approved_at:'clockInApprovedAt',
+    clock_in_explicit_at:'clockInExplicitAt',
+    clock_out_lat:'clockOutLat', clock_out_lng:'clockOutLng', clock_out_accuracy_m:'clockOutAccuracyM',
+    clock_out_in_radius:'clockOutInRadius', clock_out_reason:'clockOutReason',
   };
   const result = {};
   for (const [k,v] of Object.entries(obj)) {
@@ -2975,7 +3000,8 @@ async function syncFromSheets() {
     // [Session #5 WORKDAY] Added `workdays` to the parallel pull so admin sees nurses live.
     // [Session #7 H1] Added `banks` so the bank picker is always up to date.
     // [Session #7 fix] Added `nationalities` so the patient form is dynamic.
-    const [cases,staff,shifts,users,hotels,insurance,expenses,handovers,workdays,banks,nationalities] = await Promise.all([
+    // [Phase HR1b.1] Added `branch_geofence` for clock-in radius validation (HR1b.2)
+    const [cases,staff,shifts,users,hotels,insurance,expenses,handovers,workdays,banks,nationalities,branchGeofences] = await Promise.all([
       sbAPI('GET','cases',null,'order=created_at.asc'),
       sbAPI('GET','staff',null,'order=name.asc'),
       sbAPI('GET','shifts',null,'order=start_time.desc&limit=200'),
@@ -2987,6 +3013,7 @@ async function syncFromSheets() {
       sbAPI('GET','workdays',null,'order=date.desc&limit=500'),
       sbAPI('GET','banks',null,'order=facility,bank_name'),
       sbAPI('GET','nationalities',null,'active=eq.true&order=name_en.asc'),
+      sbAPI('GET','branch_geofence',null,'active=eq.true&order=branch_id'),
     ]);
     if(Array.isArray(nationalities) && nationalities.length){
       const list = nationalities.map(n => n.name_en).filter(Boolean);
@@ -3050,6 +3077,10 @@ async function syncFromSheets() {
         }
       });
       sl('hmc_workdays', JSON.stringify(Object.values(byId)));
+    }
+    // [Phase HR1b.1] Cache branch_geofence rows so frontend Haversine check (HR1b.2) has lat/lng/radius locally.
+    if(branchGeofences && Array.isArray(branchGeofences)){
+      sl('hmc_branch_geofences', JSON.stringify(branchGeofences.map(parseSnakeCase)));
     }
     sl('hmc_last_sync',new Date().toLocaleString('en-GB'));
     // [Phase E1.1] One-time drain of any pre-fix asset queue / unsynced local assets.
@@ -3257,6 +3288,58 @@ function saveCases(d) {
 }
 function getStaff() { return JSON.parse(ls('hmc_staff') || '[]'); }
 function getShifts() { return JSON.parse(ls('hmc_shifts') || '[]'); }
+
+// ════════════════════════════════════════════
+// [Phase HR1b.1] Branch Geofence + GPS Helpers
+// ════════════════════════════════════════════
+// Infrastructure for explicit clock-in (HR1b.2). Cache mirrors public.branch_geofence
+// (one row per clinic with lat/lng/radius_m). Helpers are read-only utilities — no
+// behavior change to login / ensureTodayWorkday / case save in this sub-phase.
+function getBranchGeofences(){ return JSON.parse(ls('hmc_branch_geofences')||'[]'); }
+function saveBranchGeofences(d){ sl('hmc_branch_geofences', JSON.stringify(d||[])); }
+function getBranchGeofence(branchId){
+  if(!branchId) return null;
+  const all = getBranchGeofences();
+  return all.find(g => g.branchId===branchId && g.active!==false) || null;
+}
+window.getBranchGeofences = getBranchGeofences;
+window.getBranchGeofence = getBranchGeofence;
+
+// [Phase HR1b.1] Geolocation Promise wrapper.
+// Resolves with {lat,lng,accuracy} OR rejects with {code,message}. Must be called
+// from a user gesture (button tap) for iOS PWA permission prompt to render.
+function hmcGetLocation(timeoutMs){
+  return new Promise(function(resolve, reject){
+    if(!navigator.geolocation){
+      return reject({code:'unsupported', message:'Geolocation not supported on this device'});
+    }
+    navigator.geolocation.getCurrentPosition(
+      function(pos){
+        resolve({lat:pos.coords.latitude, lng:pos.coords.longitude, accuracy:pos.coords.accuracy});
+      },
+      function(err){
+        var code = err.code===1?'denied':(err.code===2?'unavailable':(err.code===3?'timeout':'error'));
+        reject({code:code, message:err.message||code});
+      },
+      { enableHighAccuracy:true, timeout: timeoutMs||10000, maximumAge: 30000 }
+    );
+  });
+}
+window.hmcGetLocation = hmcGetLocation;
+
+// [Phase HR1b.1] Haversine great-circle distance in meters between two GPS points.
+// Used by HR1b.2 clock-in flow to compare user lat/lng vs. branch geofence center.
+function haversineMeters(lat1, lng1, lat2, lng2){
+  const R = 6371000; // Earth radius in meters
+  const toRad = function(d){ return d * Math.PI / 180; };
+  const dLat = toRad(lat2-lat1);
+  const dLng = toRad(lng2-lng1);
+  const a = Math.sin(dLat/2)*Math.sin(dLat/2) +
+            Math.cos(toRad(lat1))*Math.cos(toRad(lat2))*Math.sin(dLng/2)*Math.sin(dLng/2);
+  const c = 2*Math.atan2(Math.sqrt(a), Math.sqrt(1-a));
+  return R * c;
+}
+window.haversineMeters = haversineMeters;
 
 // ═══════════════════════════════════════════════════════════════════════════
 // SESSION #5 — WORKDAY MODEL (replaces the old Shift session concept)
