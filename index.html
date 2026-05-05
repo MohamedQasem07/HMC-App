@@ -2679,7 +2679,9 @@ async function retrySyncQueue(){
       // / bad column), don't keep retrying it forever — that's what was trapping the red
       // banner. Transient errors (network / 5xx) stay queued for the next pass.
       const err = window.SYNC_STATUS.lastErrorMsg || '';
-      const isPermanent = /Permission\/schema error|42501|42P01|42703|row-level security|401|403/.test(err);
+      // [Phase E1.1 D4] Mirror sbAPI permanent-error patterns — drop schema/permission
+      // failures from the queue instead of looping forever. New: 404 + PGRST20x.
+      const isPermanent = /Permission\/schema error|42501|42P01|42703|row-level security|401|403|404|PGRST20[0-9]/.test(err);
       if(isPermanent){
         droppedPermanent.push(entry);
         console.warn('[Sync Queue] Dropping permanent-failure item:', entry.table, entry.data?.id||'', '—', err.substring(0,100));
@@ -2734,8 +2736,11 @@ async function sbAPI(method, table, data=null, query='') {
       // won't help (RLS blocked, missing column, etc.) and fills the console with noise.
       // These errors need a Supabase-side fix (disable RLS, add column). Only queue
       // transient errors (5xx, network, timeout).
-      const isPermanent = res.status===401 || res.status===403 || res.status===400 ||
-                          /row-level security|42501|42P01|42703/.test(e||'');
+      // [Phase E1.1 D4] Extended: 404 covers PGRST205 (missing table); PGRST20x covers any
+      // PostgREST schema-cache error; 42P01 = undefined table, 42703 = undefined column,
+      // 42501 = RLS denial. All require Supabase-side action — never auto-retry.
+      const isPermanent = res.status===401 || res.status===403 || res.status===400 || res.status===404 ||
+                          /row-level security|42501|42P01|42703|PGRST20[0-9]/.test(e||'');
       if(isPermanent){
         window.SYNC_STATUS.lastErrorMsg = 'Permission/schema error — check Supabase RLS or missing columns. '+(e||'').substring(0,140);
         // Don't queue; don't inflate consecutiveFails forever (cap at 3 for banner)
@@ -2801,6 +2806,8 @@ function toSnake(obj, table) {
     addedBy:'added_by', nameAr:'name_ar', startDate:'start_date',
     dischargeTime:'discharge_time',
     invoiceItems:'invoice_items',
+    // [Phase E1.1] Assets module field mappings
+    purchaseDate:'purchase_date', transferLog:'transfer_log',
     // [Session #5 WORKDAY] Workday table field mappings
     firstLogin:'first_login', lastActivity:'last_activity',
     checkedOutAt:'checked_out_at', caseCount:'case_count',
@@ -2863,6 +2870,9 @@ function toSnake(obj, table) {
     insurance_case_log: new Set(['id','case_id','entry_type','data','note','created_by','created_at']),
     // [Session #7 H1] Banks reference data
     banks: new Set(['id','facility','bank_name','branch','swift','beneficiary','accounts','active','created_at']),
+    // [Phase E1.1] Assets — fixed assets register per branch
+    assets: new Set(['id','name','name_ar','category','serial','branch','purchase_date',
+      'value','notes','status','added_by','created_at','transfer_log']),
   };
   const DATE_COLS = new Set(['ka_date','dob','arrival_date','departure_date','discharge_date',
     'invoice_date','collection_date','start_date','created_at','updated_at']);
@@ -3042,6 +3052,9 @@ async function syncFromSheets() {
       sl('hmc_workdays', JSON.stringify(Object.values(byId)));
     }
     sl('hmc_last_sync',new Date().toLocaleString('en-GB'));
+    // [Phase E1.1] One-time drain of any pre-fix asset queue / unsynced local assets.
+    // Fire-and-forget — gated by hmc_e1_assets_migrated_v1 flag, idempotent across reloads.
+    try { _e1MigrateAssetsOnce(); } catch(e){ console.warn('E1 migration error:',e); }
     console.log('✅ Synced from Supabase');
     showSyncStatus('ok');
     return true;
@@ -13825,7 +13838,31 @@ const PREDEFINED_ASSETS = [
 function getAssets(){return JSON.parse(ls('hmc_assets')||'[]');}
 function saveAssets(d){
   sl('hmc_assets',JSON.stringify(d));
-  sbAPI('POST','assets',d.length?d[d.length-1]:{}).catch(()=>{});
+  // [Phase E1.1] Convert camelCase to snake_case + filter to known columns before POST.
+  // Fixes PGRST205 root cause (table now exists) + ensures payload column names match schema.
+  // Note: still posts only the LAST item (matches pre-existing behavior — D3 batch upsert deferred).
+  if(d.length){
+    sbAPI('POST','assets',toSnake(d[d.length-1],'assets')).catch(()=>{});
+  }
+}
+
+// [Phase E1.1] One-time migration: re-push all local assets to Supabase.
+// Triggered ONCE per device (gated by localStorage flag) after E1.1 deploys, to drain
+// any pre-fix queued entries that contained raw camelCase payloads. The Supabase POST
+// header `Prefer: resolution=merge-duplicates` ensures id collisions are upserted.
+async function _e1MigrateAssetsOnce(){
+  if(window.OFFLINE_MODE) return;
+  const FLAG = 'hmc_e1_assets_migrated_v1';
+  if(localStorage.getItem(FLAG)) return;
+  const assets = getAssets();
+  if(!assets.length){ localStorage.setItem(FLAG,new Date().toISOString()); return; }
+  let okCount = 0;
+  for(const a of assets){
+    const r = await sbAPI('POST','assets',toSnake(a,'assets'));
+    if(r !== null) okCount++;
+  }
+  console.info('[E1.1 migration] re-pushed '+okCount+'/'+assets.length+' assets');
+  localStorage.setItem(FLAG, new Date().toISOString());
 }
 
 // ════════════════════════════════════════════
