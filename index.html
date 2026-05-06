@@ -4652,14 +4652,14 @@ function stBadge(s){const m={'Collected':'bg','Pending':'ba','Partially Collecte
 // ════════════════════════════════════════════
 let CU=null,LANG='en',PAGE='dashboard';
 const NAV={
-  admin:[{id:'dashboard',ico:'📊',en:'Dashboard',ar:'لوحة التحكم'},{id:'cases',ico:'📋',en:'Cases',ar:'الحالات'},{id:'insurance',ico:'🛡️',en:'Insurance',ar:'التأمين'},{id:'insCos',ico:'🏢',en:'Ins. Companies',ar:'شركات التأمين'},{id:'finance',ico:'💰',en:'Finance',ar:'المالية'},{id:'staff',ico:'👥',en:'Staff & HR',ar:'الموظفون'},{id:'users',ico:'🔐',en:'Users & Access',ar:'المستخدمون والصلاحيات'},{id:'shifts',ico:'📅',en:'Attendance',ar:'سجل الحضور'},{id:'reports',ico:'📈',en:'Reports',ar:'التقارير'},{id:'treasury',ico:'🏦',en:'Treasury',ar:'الخزينة'},{id:'banks',ico:'🏛️',en:'Banks',ar:'البنوك'},{id:'catalog',ico:'🗃️',en:'Catalog',ar:'الكتالوج'},{id:'dataHub',ico:'💾',en:'Data & Backup',ar:'البيانات والنسخ الاحتياطي'},{id:'assets',ico:'🏷️',en:'Assets',ar:'الأصول'},{id:'visaMachines',ico:'💳',en:'Visa Machines',ar:'ماكينات الفيزا'},{id:'settings',ico:'⚙️',en:'Settings',ar:'الإعدادات'}],
+  admin:[{id:'dashboard',ico:'📊',en:'Dashboard',ar:'لوحة التحكم'},{id:'cases',ico:'📋',en:'Cases',ar:'الحالات'},{id:'insurance',ico:'🛡️',en:'Insurance',ar:'التأمين'},{id:'insCos',ico:'🏢',en:'Ins. Companies',ar:'شركات التأمين'},{id:'finance',ico:'💰',en:'Finance',ar:'المالية'},{id:'staff',ico:'👥',en:'Staff & HR',ar:'الموظفون'},{id:'users',ico:'🔐',en:'Users & Access',ar:'المستخدمون والصلاحيات'},{id:'shifts',ico:'📅',en:'Attendance',ar:'سجل الحضور'},{id:'schedules',ico:'🗓️',en:'Schedules',ar:'الجدولة'},{id:'reports',ico:'📈',en:'Reports',ar:'التقارير'},{id:'treasury',ico:'🏦',en:'Treasury',ar:'الخزينة'},{id:'banks',ico:'🏛️',en:'Banks',ar:'البنوك'},{id:'catalog',ico:'🗃️',en:'Catalog',ar:'الكتالوج'},{id:'dataHub',ico:'💾',en:'Data & Backup',ar:'البيانات والنسخ الاحتياطي'},{id:'assets',ico:'🏷️',en:'Assets',ar:'الأصول'},{id:'visaMachines',ico:'💳',en:'Visa Machines',ar:'ماكينات الفيزا'},{id:'settings',ico:'⚙️',en:'Settings',ar:'الإعدادات'}],
   reception:[{id:'dashboard',ico:'📊',en:'Dashboard',ar:'لوحة التحكم'},{id:'cases',ico:'📋',en:'Cases',ar:'الحالات'},{id:'insurance',ico:'🛡️',en:'Insurance',ar:'التأمين'},{id:'insCos',ico:'🏢',en:'Ins. Companies',ar:'شركات التأمين'},{id:'finance',ico:'💰',en:'Finance',ar:'المالية'},{id:'shifts',ico:'📅',en:'Attendance',ar:'سجل الحضور'},{id:'reports',ico:'📈',en:'Reports',ar:'التقارير'},{id:'treasury',ico:'🏦',en:'Treasury',ar:'الخزينة'}],
   manager:[{id:'dashboard',ico:'📊',en:'Dashboard',ar:'لوحة التحكم'},{id:'cases',ico:'📋',en:'Cases',ar:'الحالات'},{id:'insurance',ico:'🛡️',en:'Insurance',ar:'التأمين'},{id:'staff',ico:'👥',en:'Staff',ar:'الموظفون'},{id:'shifts',ico:'📅',en:'Attendance',ar:'سجل الحضور'},{id:'reports',ico:'📈',en:'Reports',ar:'التقارير'},{id:'treasury',ico:'🏦',en:'Treasury',ar:'الخزينة'},{id:'assets',ico:'🏷️',en:'Assets',ar:'الأصول'}],
   nurse:[{id:'dashboard',ico:'📊',en:'My Clinic',ar:'عيادتي'},{id:'cases',ico:'📋',en:'Cases',ar:'الحالات'},{id:'shifts',ico:'📅',en:'My Attendance',ar:'سجل حضوري'},{id:'reports',ico:'📈',en:'Reports',ar:'التقارير'},{id:'treasury',ico:'🏦',en:'Treasury',ar:'الخزينة'},{id:'assets',ico:'🏷️',en:'Assets',ar:'الأصول'}],
   // [Phase HR1a] New role NAV entries — fixes silent doctor→nurse fallback + adds 5 new HR roles
   doctor:[{id:'dashboard',ico:'📊',en:'My Schedule',ar:'جدولي'},{id:'cases',ico:'📋',en:'My Cases',ar:'حالاتي'},{id:'shifts',ico:'📅',en:'My Attendance',ar:'سجل حضوري'},{id:'reports',ico:'📈',en:'Reports',ar:'التقارير'}],
-  head_nurse:[{id:'dashboard',ico:'📊',en:'Branch Overview',ar:'نظرة عامة'},{id:'cases',ico:'📋',en:'Cases',ar:'الحالات'},{id:'staff',ico:'👥',en:'My Nurses',ar:'الممرضين'},{id:'shifts',ico:'📅',en:'Attendance',ar:'سجل الحضور'},{id:'reports',ico:'📈',en:'Branch Reports',ar:'تقارير الفرع'},{id:'treasury',ico:'🏦',en:'Treasury',ar:'الخزينة'},{id:'assets',ico:'🏷️',en:'Assets',ar:'الأصول'}],
-  hr_manager:[{id:'dashboard',ico:'📊',en:'HR Dashboard',ar:'لوحة الموارد البشرية'},{id:'staff',ico:'👥',en:'Staff & HR',ar:'الموظفون'},{id:'users',ico:'🔐',en:'Users & Access',ar:'المستخدمون والصلاحيات'},{id:'shifts',ico:'📅',en:'Attendance',ar:'سجل الحضور'},{id:'reports',ico:'📈',en:'HR Reports',ar:'تقارير الموارد البشرية'}],
+  head_nurse:[{id:'dashboard',ico:'📊',en:'Branch Overview',ar:'نظرة عامة'},{id:'cases',ico:'📋',en:'Cases',ar:'الحالات'},{id:'staff',ico:'👥',en:'My Nurses',ar:'الممرضين'},{id:'shifts',ico:'📅',en:'Attendance',ar:'سجل الحضور'},{id:'schedules',ico:'🗓️',en:'Schedules',ar:'الجدولة'},{id:'reports',ico:'📈',en:'Branch Reports',ar:'تقارير الفرع'},{id:'treasury',ico:'🏦',en:'Treasury',ar:'الخزينة'},{id:'assets',ico:'🏷️',en:'Assets',ar:'الأصول'}],
+  hr_manager:[{id:'dashboard',ico:'📊',en:'HR Dashboard',ar:'لوحة الموارد البشرية'},{id:'staff',ico:'👥',en:'Staff & HR',ar:'الموظفون'},{id:'users',ico:'🔐',en:'Users & Access',ar:'المستخدمون والصلاحيات'},{id:'shifts',ico:'📅',en:'Attendance',ar:'سجل الحضور'},{id:'schedules',ico:'🗓️',en:'Schedules',ar:'الجدولة'},{id:'reports',ico:'📈',en:'HR Reports',ar:'تقارير الموارد البشرية'}],
   lab:[{id:'dashboard',ico:'📊',en:'My Tasks',ar:'مهامي'},{id:'shifts',ico:'📅',en:'My Attendance',ar:'سجل حضوري'}],
   driver:[{id:'dashboard',ico:'📊',en:'My Trips',ar:'رحلاتي'},{id:'shifts',ico:'📅',en:'My Attendance',ar:'سجل حضوري'}],
   accountant:[{id:'dashboard',ico:'📊',en:'Dashboard',ar:'لوحة التحكم'},{id:'finance',ico:'💰',en:'Finance',ar:'المالية'},{id:'treasury',ico:'🏦',en:'Treasury',ar:'الخزينة'},{id:'banks',ico:'🏛️',en:'Banks',ar:'البنوك'},{id:'reports',ico:'📈',en:'Financial Reports',ar:'التقارير المالية'},{id:'shifts',ico:'📅',en:'My Attendance',ar:'سجل حضوري'}],
@@ -4764,6 +4764,8 @@ const ROLE_PERMS = {
   hr_manager: new Set([
     'staff.manage','staff.view','users.manage',
     'hr.attendance.view.all','hr.attendance.clockin','hr.attendance.approve',
+    // [Phase HR1c.2] HR Manager can also schedule + publish shifts cross-branch (E1 decision)
+    'hr.shifts.schedule','hr.shifts.publish',
     'hr.requests.create.self','hr.requests.review.all',
     'reports.hr'
   ]),
@@ -4821,7 +4823,7 @@ function buildSB(){
   const items=NAV[CU.role]||NAV.nurse;
   document.getElementById('sbNav').innerHTML=items.map(it=>`<div class="ni" id="ni-${it.id}" onclick="nav('${it.id}')"><span class="ni-ico">${it.ico}</span><span class="ni-en">${it.en}</span><span class="ni-ar" style="display:none;font-family:'Tajawal',sans-serif">${it.ar}</span></div>`).join('');
 }
-const PT={dashboard:{en:'Dashboard',ar:'لوحة التحكم'},cases:{en:'Patient Cases',ar:'حالات المرضى'},insurance:{en:'Insurance Management',ar:'إدارة التأمين'},insCos:{en:'Insurance Companies',ar:'شركات التأمين'},finance:{en:'Finance & Billing',ar:'المالية'},staff:{en:'Staff & HR',ar:'الموظفون'},shifts:{en:'Attendance & Work Log',ar:'سجل الحضور والعمل'},reports:{en:'Reports',ar:'التقارير'},treasury:{en:'Treasury & Cash',ar:'الخزينة'},settings:{en:'Settings',ar:'الإعدادات'},assets:{en:'Asset Register',ar:'جرد الأصول'},visaMachines:{en:'Visa Machines',ar:'ماكينات الفيزا'},catalog:{en:'Price Catalog',ar:'كتالوج الأسعار'},banks:{en:'Banks & Transfer Accounts',ar:'البنوك وحسابات التحويل'}};
+const PT={dashboard:{en:'Dashboard',ar:'لوحة التحكم'},cases:{en:'Patient Cases',ar:'حالات المرضى'},insurance:{en:'Insurance Management',ar:'إدارة التأمين'},insCos:{en:'Insurance Companies',ar:'شركات التأمين'},finance:{en:'Finance & Billing',ar:'المالية'},staff:{en:'Staff & HR',ar:'الموظفون'},shifts:{en:'Attendance & Work Log',ar:'سجل الحضور والعمل'},schedules:{en:'Shift Scheduling',ar:'جدولة المناوبات'},reports:{en:'Reports',ar:'التقارير'},treasury:{en:'Treasury & Cash',ar:'الخزينة'},settings:{en:'Settings',ar:'الإعدادات'},assets:{en:'Asset Register',ar:'جرد الأصول'},visaMachines:{en:'Visa Machines',ar:'ماكينات الفيزا'},catalog:{en:'Price Catalog',ar:'كتالوج الأسعار'},banks:{en:'Banks & Transfer Accounts',ar:'البنوك وحسابات التحويل'}};
 function nav(pg){
   PAGE=pg;
   document.querySelectorAll('.ni').forEach(e=>e.classList.remove('active'));
@@ -4834,13 +4836,16 @@ function nav(pg){
   if(pg==='staff'&&(CU.role==='admin'||CU.role==='manager')) acts.innerHTML=`<button class="btn bp">+ Add Staff</button>`;
   if(pg==='assets') acts.innerHTML=`<button class="btn bp btn-sm" onclick="openAddAsset()">+ Add Asset</button>`;
   if(pg==='visaMachines'&&CU.role==='admin') acts.innerHTML=`<button class="btn bp btn-sm" onclick="openAddMachine()">+ Add Machine</button>`;
-  const pages={dashboard:renderDash,cases:renderCases,insurance:renderIns,insCos:renderInsCos,finance:renderFin,staff:renderStaff,users:renderUsers,shifts:renderShifts,treasury:renderTreasury,reports:renderRpts,settings:renderSettings,assets:renderAssets,visaMachines:renderVisaMachines,catalog:renderCatalog,dataHub:renderDataHub,banks:renderBanks};
+  // [Phase HR1c.2] Schedules page action button — visible only for roles with hr.shifts.schedule (admin/hr_manager) or .ownBranch (head_nurse)
+  if(pg==='schedules' && (typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule')||hasPerm('hr.shifts.schedule.ownBranch')))) acts.innerHTML=`<button class="btn bp btn-sm" onclick="openCreateShiftModal()">+ Create Shift</button>`;
+  const pages={dashboard:renderDash,cases:renderCases,insurance:renderIns,insCos:renderInsCos,finance:renderFin,staff:renderStaff,users:renderUsers,shifts:renderShifts,schedules:renderSchedulesPage,treasury:renderTreasury,reports:renderRpts,settings:renderSettings,assets:renderAssets,visaMachines:renderVisaMachines,catalog:renderCatalog,dataHub:renderDataHub,banks:renderBanks};
   const rendered=(pages[pg]||renderDash)();
   if(rendered!==null&&rendered!==undefined) document.getElementById('contentArea').innerHTML=rendered;
   if(pg==='cases'){filterCases();}
   if(pg==='insurance'){INS_FILTER_TAB='all';filterIns();}
   if(pg==='insCos'){setTimeout(()=>filterInsCos(),50);}
   if(pg==='shifts'){/* renderShifts() inside pages[pg]() handles everything */}
+  if(pg==='schedules'){setTimeout(function(){ if(typeof _schedFilterChange==='function') _schedFilterChange(); },50);}
   if(pg==='staff'){filterStaff();}
   if(pg==='reports'){setTimeout(()=>{CURRENT_RPT='daily';refreshReport();},50);}
   if(pg==='assets'){setTimeout(()=>filterAssets(),50);}
@@ -4948,6 +4953,456 @@ function renderHRManagerDash(){
   </div>
   `;
 }
+
+// ════════════════════════════════════════════
+// [Phase HR1c.2] Shift Scheduling Page UI
+// ════════════════════════════════════════════
+// Reads HR1c.1 schema (shift_schedules + shift_assignments) via existing helpers.
+// Permission-gated:
+//   - admin / hr_manager → all branches  (hasPerm 'hr.shifts.schedule')
+//   - head_nurse         → own branch    (hasPerm 'hr.shifts.schedule.ownBranch')
+// Soft-delete (D1): assignments.status='removed' · NOT hard delete.
+// Shift cancel: schedule.status='cancelled' · keeps assignments for audit.
+// Conflict warning (W1 decision): warning toast on overlap · admin proceeds anyway.
+// No publish gating yet (HR1c.4) · no self-view (HR1c.3) · no attendance dual-write (HR1d).
+
+// Stable IDs per F1 (HR1c.1 spec)
+function _schedShiftId(branch, dateISO, type){
+  return 'SS-'+branch+'-'+(dateISO||'').replace(/-/g,'')+'-'+(type||'morning');
+}
+function _schedAssignmentId(shiftId, userId){
+  const hash = (shiftId||'').split('-').slice(1).join('').substring(0,12);
+  return 'SA-'+hash+'-'+String(userId||'unknown').substring(0,8);
+}
+
+// Per-row Supabase push (uses HR1b.3 saveGeofenceConfig pattern)
+async function _pushShiftSchedule(row){
+  try { return await sbAPI('POST','shift_schedules', toSnake(row,'shift_schedules')); }
+  catch(e){ console.warn('_pushShiftSchedule:',e); return null; }
+}
+async function _pushShiftAssignment(row){
+  try { return await sbAPI('POST','shift_assignments', toSnake(row,'shift_assignments')); }
+  catch(e){ console.warn('_pushShiftAssignment:',e); return null; }
+}
+
+// Branch picker scoping helper
+function _schedAllowedBranches(){
+  if(typeof hasPerm==='function' && hasPerm('hr.shifts.schedule')) return BRANCHES.map(b=>b.id);
+  if(typeof hasPerm==='function' && hasPerm('hr.shifts.schedule.ownBranch') && CU && CU.branch && CU.branch!=='all') return [CU.branch];
+  return [];
+}
+
+// Read currently-selected filters from page UI
+function _schedGetSelectedFilters(){
+  const dEl = document.getElementById('schedDate');
+  const bEl = document.getElementById('schedBranch');
+  const today = new Date().toISOString().split('T')[0];
+  const date = (dEl && dEl.value) ? dEl.value : today;
+  const allowed = _schedAllowedBranches();
+  const branch = (bEl && bEl.value) ? bEl.value : (allowed[0]||'');
+  return {date, branch};
+}
+
+function _schedFilterChange(){
+  const {date, branch} = _schedGetSelectedFilters();
+  const listEl = document.getElementById('schedList');
+  if(!listEl) return;
+  const shifts = (typeof getShiftsByBranchDate==='function') ? getShiftsByBranchDate(branch, date) : [];
+  // Stats
+  const total = shifts.length;
+  const cancelled = shifts.filter(s=>s.status==='cancelled').length;
+  const allAssign = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
+  const totalAssign = allAssign.filter(a => shifts.some(s => s.id===a.shiftId) && a.status!=='removed').length;
+  const statsEl = document.getElementById('schedStats');
+  if(statsEl) statsEl.innerHTML = '📊 '+total+' shifts · '+totalAssign+' assignments · '+cancelled+' cancelled';
+  // List
+  if(!shifts.length){
+    listEl.innerHTML = '<div class="card" style="padding:24px;text-align:center;color:var(--g500)">No shifts planned for this date · tap <strong>+ Create Shift</strong> to start</div>';
+    return;
+  }
+  // Sort by start_time
+  shifts.sort(function(a,b){ return (a.startTime||'').localeCompare(b.startTime||''); });
+  listEl.innerHTML = shifts.map(renderShiftCard).join('');
+}
+
+// Main page renderer
+function renderSchedulesPage(){
+  if(typeof hasPerm==='function' && !hasPerm('hr.shifts.schedule') && !hasPerm('hr.shifts.schedule.ownBranch')){
+    return '<div style="text-align:center;padding:60px;color:var(--g500)"><div style="font-size:40px;margin-bottom:12px">🔒</div>Scheduling permission required · contact admin</div>';
+  }
+  const allowed = _schedAllowedBranches();
+  const today = new Date().toISOString().split('T')[0];
+  const isOwnBranchOnly = (typeof hasPerm==='function' && !hasPerm('hr.shifts.schedule') && hasPerm('hr.shifts.schedule.ownBranch'));
+  const branchOpts = (isOwnBranchOnly
+    ? '<option value="'+CU.branch+'">'+(getBr(CU.branch).name||CU.branch)+' (locked)</option>'
+    : allowed.map(function(bid){ return '<option value="'+bid+'">'+getBr(bid).name+'</option>'; }).join(''));
+  return `
+  <div class="card" style="margin-bottom:14px;padding:14px">
+    <div class="ch" style="margin-bottom:10px"><div class="ct">🗓️ Shift Scheduling — جدولة المناوبات</div></div>
+    <div style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
+      <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">📅 Date</label>
+        <input class="fsi" id="schedDate" type="date" value="${today}" onchange="_schedFilterChange()" style="width:170px"></div>
+      <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">🏥 Branch</label>
+        <select class="fsi" id="schedBranch" onchange="_schedFilterChange()" ${isOwnBranchOnly?'disabled':''} style="width:200px">${branchOpts}</select></div>
+      <div style="flex:1;min-width:200px" id="schedStats"></div>
+    </div>
+  </div>
+  ${(typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule')||hasPerm('hr.shifts.schedule.ownBranch')))?`<div style="margin-bottom:10px"><button class="btn bp" onclick="openCreateShiftModal()">+ Create Shift</button></div>`:''}
+  <div id="schedList"></div>
+  ${_schedRenderCreateModal()}
+  ${_schedRenderAddStaffModal()}
+  `;
+}
+
+// Per-shift card (used by _schedFilterChange list rendering)
+function renderShiftCard(s){
+  const cancelled = s.status==='cancelled';
+  const published = s.status==='published';
+  const typeIcons = {morning:'🌅', evening:'🌆', night:'🌙', '24h':'🕐'};
+  const typeIcon = typeIcons[s.shiftType] || '📋';
+  const statusBadge = cancelled
+    ? '<span class="bdg bred" style="font-size:10px">✕ cancelled</span>'
+    : (published ? '<span class="bdg bg" style="font-size:10px">✅ published</span>' : '<span class="bdg ba" style="font-size:10px">🟡 planned</span>');
+  const docName = (s.doctorUserId && (typeof getStaff==='function')) ? (getStaff().find(function(st){ return st.id===s.doctorUserId; })?.name) : '';
+  const docFromUsers = (s.doctorUserId && (typeof getUsers==='function')) ? (getUsers().find(function(u){ return u.id===s.doctorUserId; })?.name) : '';
+  const doctorLabel = docFromUsers || docName || s.doctorUserId || '<em style="color:#94a3b8">not set</em>';
+  const canManage = (typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule') || (hasPerm('hr.shifts.schedule.ownBranch') && s.branch===CU.branch)));
+  return '<div class="card" style="margin-bottom:10px;padding:14px;'+(cancelled?'opacity:0.55;':'')+'">'+
+    '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">'+
+      '<div>'+
+        '<div style="font-size:15px;font-weight:700">'+typeIcon+' '+(s.shiftType||'shift').charAt(0).toUpperCase()+(s.shiftType||'').slice(1)+' · '+(s.startTime||'?')+'–'+(s.endTime||'?')+'</div>'+
+        '<div style="font-size:11px;color:var(--g500);margin-top:2px">'+s.id+' · '+statusBadge+'</div>'+
+      '</div>'+
+      (canManage && !cancelled ? '<div><button class="btn brd btn-sm" onclick="cancelShift(\''+s.id+'\')" style="font-size:11px">✕ Cancel Shift</button></div>' : '')+
+    '</div>'+
+    '<div style="margin-top:10px;font-size:13px"><strong>👨‍⚕️ Doctor:</strong> '+doctorLabel+'</div>'+
+    renderShiftAssignmentsList(s.id, canManage && !cancelled)+
+    (s.notes ? '<div style="margin-top:8px;font-size:12px;color:var(--g600);font-style:italic">📝 '+s.notes+'</div>' : '')+
+    '</div>';
+}
+
+// Per-shift assignments sub-list
+function renderShiftAssignmentsList(shiftId, canManage){
+  const assigns = (typeof getAssignmentsByShift==='function') ? getAssignmentsByShift(shiftId, false) : [];
+  const nurses = assigns.filter(function(a){ return a.role==='nurse'; });
+  const others = assigns.filter(function(a){ return a.role!=='nurse'; });
+  const renderRow = function(a){
+    return '<div style="display:flex;justify-content:space-between;align-items:center;padding:4px 0;border-bottom:1px dashed var(--g100)">'+
+      '<span>• '+(a.staffName||a.userId)+' <span style="font-size:10px;color:var(--g500)">('+(a.role||'?')+')</span></span>'+
+      (canManage ? '<button class="btn brd btn-sm" onclick="removeShiftAssignment(\''+a.id+'\')" style="font-size:10px;padding:2px 8px">✕</button>' : '')+
+      '</div>';
+  };
+  return '<div style="margin-top:8px"><strong>💉 Assigned ('+assigns.length+'):</strong>'+
+    (nurses.length||others.length ? nurses.map(renderRow).join('')+others.map(renderRow).join('') : '<div style="font-size:12px;color:var(--g500);padding:4px 0">No staff assigned yet</div>')+
+    (canManage ? '<button class="btn bs btn-sm" onclick="openAddStaffPicker(\''+shiftId+'\')" style="margin-top:6px;font-size:11px">+ Add Staff</button>' : '')+
+    '</div>';
+}
+
+// Create Shift modal HTML (rendered once per page render · hidden by default)
+function _schedRenderCreateModal(){
+  const allowed = _schedAllowedBranches();
+  const isOwnBranchOnly = (typeof hasPerm==='function' && !hasPerm('hr.shifts.schedule') && hasPerm('hr.shifts.schedule.ownBranch'));
+  const branchOpts = (isOwnBranchOnly
+    ? '<option value="'+CU.branch+'">'+(getBr(CU.branch).name||CU.branch)+'</option>'
+    : allowed.map(function(bid){ return '<option value="'+bid+'">'+getBr(bid).name+'</option>'; }).join(''));
+  // Doctor picker — getStaff().filter(role==='Doctor') primary · HMC_DOCTORS fallback (D1 decision)
+  const staffDocs = (typeof getStaff==='function')?getStaff().filter(function(s){return s.role==='Doctor';}):[];
+  const docNames = staffDocs.length ? staffDocs.map(function(d){return {id:d.id,name:d.name};}) : (typeof HMC_DOCTORS!=='undefined'?HMC_DOCTORS.map(function(n){return {id:n,name:n};}):[]);
+  const docOpts = '<option value="">— None —</option>' + docNames.map(function(d){ return '<option value="'+d.id+'">'+d.name+'</option>'; }).join('');
+  // Nurse multi-select — fetch active nurses from users (HR1a · login-bearing identity)
+  const usersAll = (typeof getUsers==='function')?getUsers():[];
+  const nurses = usersAll.filter(function(u){ return u.role==='nurse' && u.active!==false; });
+  const today = new Date().toISOString().split('T')[0];
+  return `
+  <div class="mbd" id="createShiftModal">
+    <div class="mbox" style="max-width:520px;width:92vw;max-height:90vh;overflow:auto">
+      <div class="mhd"><div class="mt">🗓️ Create New Shift</div><button class="mc" onclick="closeCreateShiftModal()">×</button></div>
+      <div class="mbd-body" style="padding:16px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Branch</label>
+            <select class="fsi" id="cs_branch" ${isOwnBranchOnly?'disabled':''}>${branchOpts}</select></div>
+          <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Date</label>
+            <input class="fsi" id="cs_date" type="date" value="${today}"></div>
+        </div>
+        <div style="margin-bottom:10px">
+          <label style="font-size:11px;color:var(--g600);display:block;margin-bottom:4px">Shift Type</label>
+          <div style="display:flex;gap:8px;flex-wrap:wrap">
+            <label><input type="radio" name="cs_type" value="morning" checked> 🌅 Morning</label>
+            <label><input type="radio" name="cs_type" value="evening"> 🌆 Evening</label>
+            <label><input type="radio" name="cs_type" value="night"> 🌙 Night</label>
+            <label><input type="radio" name="cs_type" value="24h"> 🕐 24h</label>
+          </div>
+        </div>
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+          <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Start Time</label>
+            <input class="fsi" id="cs_start" type="time" value="08:00"></div>
+          <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">End Time</label>
+            <input class="fsi" id="cs_end" type="time" value="16:00"></div>
+        </div>
+        <div style="margin-bottom:10px">
+          <label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Doctor (optional)</label>
+          <select class="fsi" id="cs_doctor" style="width:100%">${docOpts}</select>
+        </div>
+        <div style="margin-bottom:10px">
+          <label style="font-size:11px;color:var(--g600);display:block;margin-bottom:4px">Nurses (${nurses.length} active)</label>
+          <div id="cs_nurses" style="max-height:160px;overflow:auto;border:1px solid var(--g200);border-radius:6px;padding:6px;background:var(--g50)">
+          ${nurses.length ? nurses.map(function(n){
+            const inBranch = (!CU || !CU.branch || CU.branch==='all') ? true : (n.branch===CU.branch);
+            const branchNote = (n.branch && n.branch!=='all') ? ' <span style="font-size:10px;color:var(--g500)">('+(getBr(n.branch).name||n.branch)+')</span>' : '';
+            return '<label style="display:block;padding:3px 0"><input type="checkbox" class="cs-nurse-cb" data-uid="'+n.id+'" data-name="'+(n.name||'').replace(/"/g,'&quot;')+'"> '+(n.name||n.username||n.id)+branchNote+'</label>';
+          }).join('') : '<div style="font-size:12px;color:var(--g500);padding:4px">No active nurse users · use Users & Access page to add nurses</div>'}
+          </div>
+        </div>
+        <div style="margin-bottom:10px">
+          <label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Notes (optional)</label>
+          <input class="fsi" id="cs_notes" type="text" placeholder="Optional shift notes..." style="width:100%">
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+          <button class="btn bs" onclick="closeCreateShiftModal()">Cancel</button>
+          <button class="btn bp" onclick="saveShiftSchedule()">✅ Create Shift</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// Add Staff picker modal HTML
+function _schedRenderAddStaffModal(){
+  return '<div class="mbd" id="addStaffModal"><div class="mbox" style="max-width:480px;width:92vw">'+
+    '<div class="mhd"><div class="mt" id="addStaffTitle">Add Staff to Shift</div><button class="mc" onclick="closeAddStaffPicker()">×</button></div>'+
+    '<div class="mbd-body" id="addStaffBody" style="padding:16px"></div>'+
+    '</div></div>';
+}
+
+function openCreateShiftModal(branchOverride, dateOverride){
+  const m = document.getElementById('createShiftModal');
+  if(!m){ if(typeof toast==='function') toast('Open Schedules page first','warn'); return; }
+  if(branchOverride){
+    const bEl = document.getElementById('cs_branch'); if(bEl) bEl.value = branchOverride;
+  }
+  if(dateOverride){
+    const dEl = document.getElementById('cs_date'); if(dEl) dEl.value = dateOverride;
+  }
+  m.classList.add('open');
+}
+function closeCreateShiftModal(){
+  const m = document.getElementById('createShiftModal');
+  if(m) m.classList.remove('open');
+}
+window.openCreateShiftModal = openCreateShiftModal;
+window.closeCreateShiftModal = closeCreateShiftModal;
+
+async function saveShiftSchedule(){
+  const branch = (document.getElementById('cs_branch')?.value||'').trim();
+  const date = (document.getElementById('cs_date')?.value||'').trim();
+  const typeEl = document.querySelector('input[name="cs_type"]:checked');
+  const type = typeEl ? typeEl.value : 'morning';
+  const startTime = (document.getElementById('cs_start')?.value||'').trim();
+  const endTime = (document.getElementById('cs_end')?.value||'').trim();
+  const doctorUserId = (document.getElementById('cs_doctor')?.value||'').trim();
+  const notes = (document.getElementById('cs_notes')?.value||'').trim().substring(0,400);
+  if(!branch){ if(typeof toast==='function') toast('Branch required','err'); return; }
+  if(!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)){ if(typeof toast==='function') toast('Invalid date','err'); return; }
+  if(!type){ if(typeof toast==='function') toast('Shift type required','err'); return; }
+  if(!startTime || !endTime){ if(typeof toast==='function') toast('Start + end times required','err'); return; }
+  // Permission re-check (defense in depth)
+  const allowed = _schedAllowedBranches();
+  if(allowed.indexOf(branch)<0){ if(typeof toast==='function') toast('You cannot schedule for this branch','err'); return; }
+  // Build row
+  const id = _schedShiftId(branch, date, type);
+  const nowISO = new Date().toISOString();
+  const row = {
+    id: id, branch: branch, date: date, shiftType: type,
+    startTime: startTime+(startTime.length===5?':00':''),
+    endTime: endTime+(endTime.length===5?':00':''),
+    doctorUserId: doctorUserId || null,
+    status: 'planned', notes: notes || null,
+    createdBy: (typeof CU!=='undefined' && CU) ? CU.id : null,
+    updatedAt: nowISO
+  };
+  // Optimistic local cache
+  const all = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
+  const idx = all.findIndex(function(s){ return s.id===id; });
+  if(idx>=0) all[idx] = Object.assign({}, all[idx], row);
+  else all.push(Object.assign({createdAt:nowISO}, row));
+  if(typeof saveShiftSchedules==='function') saveShiftSchedules(all);
+  // Push to Supabase
+  await _pushShiftSchedule(row);
+  // Collect checked nurse user_ids
+  const cbs = document.querySelectorAll('.cs-nurse-cb:checked');
+  const nurseList = Array.from(cbs).map(function(cb){ return {userId:cb.dataset.uid, staffName:cb.dataset.name}; });
+  // Add nurse assignments
+  let added = 0;
+  for(const n of nurseList){
+    const ok = await addShiftAssignment(id, n.userId, 'nurse', n.staffName, /*silent=*/true);
+    if(ok) added++;
+  }
+  // Add doctor assignment if doctor picked
+  if(doctorUserId){
+    let docName = '';
+    if(typeof getStaff==='function'){
+      const sd = getStaff().find(function(s){ return s.id===doctorUserId; });
+      if(sd) docName = sd.name;
+    }
+    if(!docName && typeof getUsers==='function'){
+      const ud = getUsers().find(function(u){ return u.id===doctorUserId; });
+      if(ud) docName = ud.name||ud.username||doctorUserId;
+    }
+    if(!docName) docName = doctorUserId;
+    await addShiftAssignment(id, doctorUserId, 'doctor', docName, /*silent=*/true);
+  }
+  if(typeof logAccess==='function') logAccess('hr.shift.created', id, branch+'|'+date+'|'+type+'|'+nurseList.length+'nurses');
+  if(typeof toast==='function') toast('✅ Shift created with '+added+' nurse assignment(s)','ok');
+  closeCreateShiftModal();
+  // Move filters to the new shift's date+branch + re-render
+  const dEl = document.getElementById('schedDate'); if(dEl) dEl.value = date;
+  const bEl = document.getElementById('schedBranch'); if(bEl) bEl.value = branch;
+  if(typeof _schedFilterChange==='function') _schedFilterChange();
+}
+window.saveShiftSchedule = saveShiftSchedule;
+
+async function addShiftAssignment(shiftId, userId, role, staffName, silent){
+  if(!shiftId || !userId || !role) return false;
+  // Find shift for conflict check
+  const shifts = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
+  const shift = shifts.find(function(s){ return s.id===shiftId; });
+  // Conflict warning (W1: warning only · not blocking)
+  if(shift && typeof findShiftConflicts==='function'){
+    // Temporarily simulate this assignment to get conflicts
+    const all = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
+    const tempId = _schedAssignmentId(shiftId, userId);
+    const exists = all.find(function(a){ return a.shiftId===shiftId && a.userId===userId && a.status!=='removed'; });
+    if(!exists){
+      all.push({id:tempId, shiftId:shiftId, userId:userId, role:role, status:'assigned'});
+      if(typeof saveShiftAssignments==='function') saveShiftAssignments(all);
+      const conflicts = findShiftConflicts(userId, shift.date);
+      if(conflicts.length && !silent){
+        const otherShift = conflicts[0].shift1.id===shiftId ? conflicts[0].shift2 : conflicts[0].shift1;
+        const proceed = confirm('⚠ '+(staffName||userId)+' is already assigned to '+(getBr(otherShift.branch).name||otherShift.branch)+' '+(otherShift.startTime||'?')+'–'+(otherShift.endTime||'?')+' on '+otherShift.date+'.\n\nOverlap detected. Continue anyway?');
+        if(!proceed){
+          // Rollback temp insert
+          all.pop();
+          if(typeof saveShiftAssignments==='function') saveShiftAssignments(all);
+          if(typeof toast==='function') toast('Assignment cancelled','warn');
+          return false;
+        }
+      }
+      // Remove the temp (we'll re-add cleanly below with full fields)
+      all.pop();
+      if(typeof saveShiftAssignments==='function') saveShiftAssignments(all);
+    }
+  }
+  // Idempotent check: existing row?
+  const all = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
+  const existingIdx = all.findIndex(function(a){ return a.shiftId===shiftId && a.userId===userId; });
+  const nowISO = new Date().toISOString();
+  let row;
+  if(existingIdx>=0){
+    if(all[existingIdx].status==='removed'){
+      // Reactivate
+      all[existingIdx].status = 'assigned';
+      all[existingIdx].assignedBy = (typeof CU!=='undefined' && CU)?CU.id:null;
+      all[existingIdx].assignedAt = nowISO;
+      row = all[existingIdx];
+    } else {
+      if(!silent && typeof toast==='function') toast('Already assigned','warn');
+      return false;
+    }
+  } else {
+    row = {
+      id: _schedAssignmentId(shiftId, userId),
+      shiftId: shiftId, userId: userId,
+      staffName: staffName || userId,
+      role: role,
+      status: 'assigned',
+      assignedBy: (typeof CU!=='undefined' && CU)?CU.id:null,
+      assignedAt: nowISO,
+      notes: null
+    };
+    all.push(row);
+  }
+  if(typeof saveShiftAssignments==='function') saveShiftAssignments(all);
+  await _pushShiftAssignment(row);
+  if(typeof logAccess==='function') logAccess('hr.shift.assigned', row.id, shiftId+'|'+userId+'|'+role);
+  if(!silent && typeof toast==='function') toast('✅ '+(staffName||userId)+' assigned','ok');
+  return true;
+}
+window.addShiftAssignment = addShiftAssignment;
+
+async function removeShiftAssignment(assignmentId){
+  if(!assignmentId) return;
+  const all = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
+  const idx = all.findIndex(function(a){ return a.id===assignmentId; });
+  if(idx<0){ if(typeof toast==='function') toast('Assignment not found','err'); return; }
+  if(all[idx].status==='removed'){ if(typeof toast==='function') toast('Already removed','warn'); return; }
+  if(!confirm('Remove '+(all[idx].staffName||all[idx].userId)+' from this shift?')) return;
+  all[idx].status = 'removed';
+  if(typeof saveShiftAssignments==='function') saveShiftAssignments(all);
+  await _pushShiftAssignment(all[idx]);
+  if(typeof logAccess==='function') logAccess('hr.shift.assignment.removed', assignmentId, '');
+  if(typeof toast==='function') toast('✕ Removed','ok');
+  if(typeof _schedFilterChange==='function') _schedFilterChange();
+}
+window.removeShiftAssignment = removeShiftAssignment;
+
+async function cancelShift(shiftId){
+  if(!shiftId) return;
+  const all = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
+  const idx = all.findIndex(function(s){ return s.id===shiftId; });
+  if(idx<0){ if(typeof toast==='function') toast('Shift not found','err'); return; }
+  if(all[idx].status==='cancelled'){ if(typeof toast==='function') toast('Already cancelled','warn'); return; }
+  if(!confirm('Cancel this shift? Existing assignments will remain for audit but the shift will be marked cancelled.')) return;
+  all[idx].status = 'cancelled';
+  all[idx].updatedAt = new Date().toISOString();
+  if(typeof saveShiftSchedules==='function') saveShiftSchedules(all);
+  await _pushShiftSchedule(all[idx]);
+  if(typeof logAccess==='function') logAccess('hr.shift.cancelled', shiftId, '');
+  if(typeof toast==='function') toast('✕ Shift cancelled','ok');
+  if(typeof _schedFilterChange==='function') _schedFilterChange();
+}
+window.cancelShift = cancelShift;
+
+function openAddStaffPicker(shiftId){
+  const m = document.getElementById('addStaffModal');
+  const titleEl = document.getElementById('addStaffTitle');
+  const bodyEl = document.getElementById('addStaffBody');
+  if(!m || !titleEl || !bodyEl){ if(typeof toast==='function') toast('Open Schedules page first','warn'); return; }
+  const all = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
+  const shift = all.find(function(s){ return s.id===shiftId; });
+  if(!shift){ if(typeof toast==='function') toast('Shift not found','err'); return; }
+  // List nurses NOT yet assigned (or assigned but status='removed')
+  const usersAll = (typeof getUsers==='function')?getUsers():[];
+  const nurses = usersAll.filter(function(u){ return u.role==='nurse' && u.active!==false; });
+  const assigns = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
+  const activelyAssigned = new Set(assigns.filter(function(a){ return a.shiftId===shiftId && a.status!=='removed'; }).map(function(a){ return a.userId; }));
+  const available = nurses.filter(function(n){ return !activelyAssigned.has(n.id); });
+  titleEl.innerHTML = 'Add Staff to: '+(shift.shiftType||'shift')+' · '+(getBr(shift.branch).name||shift.branch)+' · '+shift.date;
+  if(!available.length){
+    bodyEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--g500)">All active nurses already assigned · or no nurses available</div>'+
+      '<div style="text-align:right;margin-top:10px"><button class="btn bs" onclick="closeAddStaffPicker()">Close</button></div>';
+  } else {
+    bodyEl.innerHTML = '<div style="max-height:340px;overflow:auto">'+
+      available.map(function(n){
+        const branchNote = (n.branch && n.branch!=='all') ? ' <span style="font-size:10px;color:var(--g500)">('+(getBr(n.branch).name||n.branch)+')</span>' : '';
+        const safeName = (n.name||n.username||n.id).replace(/'/g,"\\'");
+        return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--g100)">'+
+          '<span>• '+(n.name||n.username||n.id)+branchNote+'</span>'+
+          '<button class="btn bp btn-sm" onclick="addShiftAssignment(\''+shiftId+'\',\''+n.id+'\',\'nurse\',\''+safeName+'\').then(function(ok){ if(ok){ closeAddStaffPicker(); _schedFilterChange(); } })" style="font-size:11px;padding:3px 10px">+ Add</button>'+
+          '</div>';
+      }).join('')+'</div>'+
+      '<div style="text-align:right;margin-top:10px"><button class="btn bs" onclick="closeAddStaffPicker()">Cancel</button></div>';
+  }
+  m.classList.add('open');
+}
+function closeAddStaffPicker(){
+  const m = document.getElementById('addStaffModal');
+  if(m) m.classList.remove('open');
+}
+window.openAddStaffPicker = openAddStaffPicker;
+window.closeAddStaffPicker = closeAddStaffPicker;
+window.renderSchedulesPage = renderSchedulesPage;
+window.renderShiftCard = renderShiftCard;
+window.renderShiftAssignmentsList = renderShiftAssignmentsList;
 
 // [Phase HR1a] Minimal placeholder dashboard for lab / driver / accountant / doctor roles.
 // Each role's full features ship in HR1b (clock-in) + HR1d (attendance) + HR1e (requests) + later phases.
