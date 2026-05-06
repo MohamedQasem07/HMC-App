@@ -5113,11 +5113,12 @@ function _schedRenderCreateModal(){
   const usersAll = (typeof getUsers==='function')?getUsers():[];
   const nurses = usersAll.filter(function(u){ return u.role==='nurse' && u.active!==false; });
   const today = new Date().toISOString().split('T')[0];
+  // [Phase HR1c.2a] UI hotfix · use .modal/.mhdr/.mbody (existing CSS) instead of non-existent mbox/mhd/mbd-body classes
   return `
   <div class="mbd" id="createShiftModal">
-    <div class="mbox" style="max-width:520px;width:92vw;max-height:90vh;overflow:auto">
-      <div class="mhd"><div class="mt">🗓️ Create New Shift</div><button class="mc" onclick="closeCreateShiftModal()">×</button></div>
-      <div class="mbd-body" style="padding:16px">
+    <div class="modal" style="max-width:520px;width:92vw;max-height:90vh;overflow:auto">
+      <div class="mhdr"><div class="mt">🗓️ Create New Shift</div><button class="mc" onclick="closeCreateShiftModal()">×</button></div>
+      <div class="mbody" style="padding:16px">
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
           <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Branch</label>
             <select class="fsi" id="cs_branch" ${isOwnBranchOnly?'disabled':''}>${branchOpts}</select></div>
@@ -5168,9 +5169,9 @@ function _schedRenderCreateModal(){
 
 // Add Staff picker modal HTML
 function _schedRenderAddStaffModal(){
-  return '<div class="mbd" id="addStaffModal"><div class="mbox" style="max-width:480px;width:92vw">'+
-    '<div class="mhd"><div class="mt" id="addStaffTitle">Add Staff to Shift</div><button class="mc" onclick="closeAddStaffPicker()">×</button></div>'+
-    '<div class="mbd-body" id="addStaffBody" style="padding:16px"></div>'+
+  return '<div class="mbd" id="addStaffModal"><div class="modal" style="max-width:480px;width:92vw">'+
+    '<div class="mhdr"><div class="mt" id="addStaffTitle">Add Staff to Shift</div><button class="mc" onclick="closeAddStaffPicker()">×</button></div>'+
+    '<div class="mbody" id="addStaffBody" style="padding:16px"></div>'+
     '</div></div>';
 }
 
