@@ -5243,6 +5243,8 @@ function renderAdminDash(){
     <div class="sc"><div class="sc-ico" style="background:var(--redl)">📝</div><div class="sc-l">Draft / Pending</div><div class="sc-v sc-dn">${pending.length}</div><div class="sc-s">Need attention</div></div>
   </div>
 
+  ${/* [Phase HR1b.3a] Pending Clock-In Approvals · cross-branch (admin sees all branches) */ renderPendingClockInsCard('all')}
+
   <!-- Line Chart -->
   <div class="card" style="margin-bottom:14px;padding:14px 16px">
     <div class="ch" style="margin-bottom:8px">
