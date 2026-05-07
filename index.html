@@ -3674,6 +3674,9 @@ function _rosterStaffRows(branch, monthYM){
 // Decorates each returned shift with assignmentRole='nurse'|'doctor'.
 function _rosterShiftsForCell(staffId, dateISO, branch, allShifts, allAssigns){
   if(!staffId || !dateISO || !branch) return [];
+  // [Phase HR1c.4b.1c] Defensive dedupe at read time · hides cache duplicates · pure read-only.
+  allShifts = (typeof _dedupeById==='function') ? _dedupeById(allShifts) : (allShifts||[]);
+  allAssigns = (typeof _dedupeById==='function') ? _dedupeById(allAssigns) : (allAssigns||[]);
   const myShiftIds = new Set(
     (allAssigns||[])
       .filter(function(a){ return a && a.userId===staffId && a.status!=='removed'; })
@@ -5337,10 +5340,54 @@ function renderHRManagerDash(){
 function _schedShiftId(branch, dateISO, type){
   return 'SS-'+branch+'-'+(dateISO||'').replace(/-/g,'')+'-'+(type||'morning');
 }
+// [Phase HR1c.4b.1c] Collision-free SA-id: drop `substring(0,12)` truncation that previously caused
+// all (branch, year, user) shifts to share an id. Body now preserves full branch + YYYYMMDD + type.
+// Old rows in cache/Supabase keep their (collided) ids forever — `addShiftAssignment` finds existing
+// rows by the (shiftId, userId) tuple, NOT by SA-id, so back-compat is preserved without migration.
+// Length: 7-12 char branch + 8 char date + ≤7 char type + 8 char user = ≤40 chars total · safely under PostgreSQL TEXT limits.
 function _schedAssignmentId(shiftId, userId){
-  const hash = (shiftId||'').split('-').slice(1).join('').substring(0,12);
-  return 'SA-'+hash+'-'+String(userId||'unknown').substring(0,8);
+  const compact = String(shiftId||'').replace(/^SS-/,'').replace(/-/g,'');
+  return 'SA-'+compact+'-'+String(userId||'unknown').substring(0,8);
 }
+
+// [Phase HR1c.4b.1c] Defensive O(n) dedupe by `id` field · last-wins semantics.
+// Used by _plannerShiftsForCell + _rosterShiftsForCell at READ time only — never mutates the cache.
+// Hides accidental duplicate rows that may have leaked into localStorage (rapid-click race · stale state).
+function _dedupeById(arr){
+  if(!Array.isArray(arr) || arr.length<2) return arr || [];
+  const m = new Map();
+  for(const x of arr){ if(x && x.id) m.set(x.id, x); }
+  return Array.from(m.values());
+}
+
+// [Phase HR1c.4b.1c] Find shifts where `userId` already has an active nurse assignment on `dateISO`,
+// EXCLUDING `excludeShiftId` (so callers can detect "would this make a 2nd shift on the same day").
+// Includes overnight bleed-back (24h or night shift on day-1 still covers `dateISO`).
+// Filters: cancelled shifts excluded · removed assignments excluded · only role='nurse'.
+// Used by _rosterCellAssign (per-call confirm) · applyPlanMonthExecute (pre-batch summary) · applyPatternExecute (post-batch toast).
+function _findActiveSameDateShiftsFor(userId, dateISO, excludeShiftId){
+  if(!userId || !dateISO) return [];
+  const allShifts = _dedupeById((typeof getShiftSchedules==='function')?getShiftSchedules():[]);
+  const allAssigns = _dedupeById((typeof getShiftAssignments==='function')?getShiftAssignments():[]);
+  const myShiftIds = new Set(
+    allAssigns
+      .filter(function(a){ return a && a.userId===userId && a.status!=='removed' && a.role==='nurse'; })
+      .map(function(a){ return a.shiftId; })
+  );
+  const dayBefore = (typeof _addDaysISO==='function') ? _addDaysISO(dateISO, -1) : dateISO;
+  return allShifts.filter(function(s){
+    if(!s || s.id===excludeShiftId || s.status==='cancelled') return false;
+    if(!myShiftIds.has(s.id)) return false;
+    const sameDay = s.date === dateISO;
+    const fromYesterday = s.date === dayBefore && (
+      (typeof _shiftIsOvernight==='function' && _shiftIsOvernight(s)) ||
+      (typeof _shiftIs24h==='function' && _shiftIs24h(s))
+    );
+    return sameDay || fromYesterday;
+  });
+}
+window._dedupeById = _dedupeById;
+window._findActiveSameDateShiftsFor = _findActiveSameDateShiftsFor;
 
 // Per-row Supabase push (uses HR1b.3 saveGeofenceConfig pattern)
 async function _pushShiftSchedule(row){
@@ -5844,6 +5891,23 @@ async function _rosterCellAssign(staffId, dateISO, branch, shiftType){
   const expectedShiftId = (typeof _schedShiftId==='function') ? _schedShiftId(branch, dateISO, shiftType) : null;
   const already = allAssigns.find(function(a){ return a && a.shiftId===expectedShiftId && a.userId===staffId && a.status!=='removed'; });
   if(already){ if(typeof toast==='function') toast('Already assigned to this shift','warn'); _rosterClosePopover(); return; }
+  // [Phase HR1c.4b.1c] Same-day double-coverage confirm · admin must consciously approve cross-branch/cross-type same-date assignments.
+  if(typeof _findActiveSameDateShiftsFor==='function'){
+    const conflicts = _findActiveSameDateShiftsFor(staffId, dateISO, expectedShiftId);
+    if(conflicts.length){
+      const list = conflicts.map(function(s){
+        const brName = (typeof getBr==='function')?(getBr(s.branch).name||s.branch):s.branch;
+        return '· '+brName+' · '+(s.shiftType||'?')+' · '+
+          String(s.startTime||'').substring(0,5)+'–'+String(s.endTime||'').substring(0,5);
+      }).join('\n');
+      const ok = confirm(
+        (u.name||u.username||staffId)+' already has '+conflicts.length+' active shift'+
+        (conflicts.length===1?'':'s')+' on '+dateISO+':\n\n'+list+
+        '\n\nAdd this shift as well? (Cross-branch/cross-type coverage)'
+      );
+      if(!ok){ if(typeof toast==='function') toast('Cancelled · no changes','warn'); _rosterClosePopover(); return; }
+    }
+  }
   // Upsert shift + add nurse assignment via existing HR1c.2 write path
   const shiftId = await _rosterUpsertShiftIfMissing(branch, dateISO, shiftType);
   if(!shiftId){ if(typeof toast==='function') toast('Failed to create/find shift','err'); return; }
@@ -6172,6 +6236,27 @@ async function applyPatternExecute(){
       toast('⚠ Conflicts after pattern: '+flagged.slice(0,3).join(' · ')+(flagged.length>3?(' · +'+(flagged.length-3)+' more'):''),'warn');
     }
   } catch(e){ /* silent · conflict re-check is best-effort */ }
+  // [Phase HR1c.4b.1c] Post-batch multi-shift summary · counts (staff,date) pairs that now have
+  // 2+ active shifts (cross-branch coverage) · silent during execution · single info toast at end.
+  try {
+    if(typeof _findActiveSameDateShiftsFor==='function'){
+      let multiDayCount = 0;
+      for(const p of staff){
+        const seenDays = new Set();
+        for(const d of dates){
+          if(seenDays.has(d)) continue;
+          seenDays.add(d);
+          const expectedSid = (typeof _schedShiftId==='function') ? _schedShiftId(branch, d, shiftType) : null;
+          const others = _findActiveSameDateShiftsFor(p.id, d, expectedSid);
+          if(others.length) multiDayCount++;
+        }
+      }
+      if(multiDayCount && typeof toast==='function'){
+        toast('ℹ '+multiDayCount+' (staff,date) pair'+(multiDayCount===1?'':'s')+
+          ' now have multiple active shifts (cross-branch coverage)','warn');
+      }
+    }
+  } catch(e){ /* silent · multi-shift summary is best-effort */ }
   closeApplyPatternModal();
   if(typeof _rosterFilterChange==='function') _rosterFilterChange();
 }
@@ -6280,8 +6365,12 @@ function _plannerStaffRows(monthYM){
 
 // [Phase HR1c.4b.1b] Cross-branch shift lookup for a (nurse, dateISO) cell · doctor path EXCLUDED (planner is nurses-only).
 // Permission scope: head_nurse sees own-branch only · admin/hr_manager sees all.
+// [Phase HR1c.4b.1c] Defensive dedupe at read time hides accidental duplicate rows in localStorage cache.
 function _plannerShiftsForCell(staffId, dateISO, allShifts, allAssigns){
   if(!staffId || !dateISO) return [];
+  // [Phase HR1c.4b.1c] Defensive dedupe — protects against cache duplicates.
+  allShifts = (typeof _dedupeById==='function') ? _dedupeById(allShifts) : (allShifts||[]);
+  allAssigns = (typeof _dedupeById==='function') ? _dedupeById(allAssigns) : (allAssigns||[]);
   const hasAll = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
   const ownBranchOnly = (typeof hasPerm==='function' && !hasAll && hasPerm('hr.shifts.schedule.ownBranch') && CU && CU.branch && CU.branch!=='all') ? CU.branch : null;
   const myShiftIds = new Set(
@@ -6714,6 +6803,31 @@ async function applyPlanMonthExecute(){
       if(typeof toast==='function') toast('Permission denied for this branch','err');
       if(applyBtn) applyBtn.disabled = false; if(cancelBtn) cancelBtn.disabled = false;
       return;
+    }
+    // [Phase HR1c.4b.1c] Pre-batch summary confirm · single dialog covering ALL selected days that
+    // would result in cross-branch/cross-type same-date double-coverage. Default = cancel.
+    if(typeof _findActiveSameDateShiftsFor==='function'){
+      const conflictDays = [];
+      for(const day of sel){
+        const expectedSid = (typeof _schedShiftId==='function') ? _schedShiftId(branch, day, shiftType) : null;
+        const others = _findActiveSameDateShiftsFor(nurseId, day, expectedSid);
+        if(others.length) conflictDays.push({ day: day, count: others.length });
+      }
+      if(conflictDays.length){
+        const summary = conflictDays.slice(0,10).map(function(c){ return '· '+c.day+' ('+c.count+' existing)'; }).join('\n')
+          + (conflictDays.length>10 ? '\n· ... +'+(conflictDays.length-10)+' more' : '');
+        const okMulti = confirm(
+          nurseName+' already has shifts on '+conflictDays.length+
+          ' selected day'+(conflictDays.length===1?'':'s')+
+          ' at other branches/types:\n\n'+summary+
+          '\n\nProceed with cross-branch double-coverage on these days?'
+        );
+        if(!okMulti){
+          if(applyBtn) applyBtn.disabled = false; if(cancelBtn) cancelBtn.disabled = false;
+          if(typeof toast==='function') toast('Cancelled · no changes','warn');
+          return;
+        }
+      }
     }
     const userStartHM = startTime.length===5 ? startTime+':00' : startTime;
     const userEndHM   = endTime.length===5   ? endTime+':00'   : endTime;
