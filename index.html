@@ -5461,7 +5461,7 @@ function _rosterCellClick(staffId, dateISO){
 }
 // Opens the popover (small modal · same .mbd/.modal/.mhdr/.mbody pattern as HR1c.2a).
 function _rosterCellPopover(shifts, staffId, dateISO){
-  // Resolve staff name for header
+  // Resolve staff name + role for header + edit-mode gating
   const usersAll = (typeof getUsers==='function') ? getUsers() : [];
   const staffAll = (typeof getStaff==='function') ? getStaff() : [];
   const u = usersAll.find(function(x){ return x.id===staffId; });
@@ -5469,9 +5469,39 @@ function _rosterCellPopover(shifts, staffId, dateISO){
   const staffName = (u && (u.name||u.username)) || (s && s.name) || staffId;
   let dateLbl = dateISO;
   try { const d = new Date(dateISO+'T00:00:00'); dateLbl = d.toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short',year:'numeric'}); } catch(e){}
+  // [Phase HR1c.4b] Determine current branch + permission + nurse-only edit gating.
+  const branchEl = document.getElementById('rostBranch');
+  const allowed = (typeof _schedAllowedBranches==='function') ? _schedAllowedBranches() : [];
+  const branch = (branchEl && branchEl.value) ? branchEl.value : (allowed[0]||'');
+  const canManage = (typeof hasPerm==='function' && (
+    hasPerm('hr.shifts.schedule') ||
+    (hasPerm('hr.shifts.schedule.ownBranch') && branch===CU.branch)
+  ));
+  const isNurseUser = !!(u && u.role==='nurse' && u.active!==false);
+  // Quick-Edit only available for active nurse users (HR1c.4a.1 + HR1c.4b nursing-only)
+  const editAllowed = canManage && isNurseUser;
+  const safeStaff = String(staffId||'').replace(/'/g, "\\'");
+  const safeDate = String(dateISO||'').replace(/'/g, "\\'");
+  const safeBranch = String(branch||'').replace(/'/g, "\\'");
   let bodyHTML = '';
   if(!shifts || !shifts.length){
-    bodyHTML = '<div style="padding:14px;text-align:center;color:var(--g500)">📅 OFF · No shift assigned for this day.</div>';
+    // [Phase HR1c.4b] Empty cell: show OFF text + Quick-Assign shift-type radios (nurse · canManage only)
+    let assignBlock = '';
+    if(editAllowed){
+      assignBlock = '<div style="border-top:1px solid var(--g200);margin-top:10px;padding-top:10px">'+
+        '<div style="font-size:12px;font-weight:600;margin-bottom:6px">Quick assign</div>'+
+        '<div style="display:flex;flex-direction:column;gap:4px;font-size:12px">'+
+          '<label><input type="radio" name="rostQAtype" value="morning"> 🌅 Morning <span style="color:var(--g500);font-size:11px">08:00 → 16:00</span></label>'+
+          '<label><input type="radio" name="rostQAtype" value="evening"> 🌆 Evening <span style="color:var(--g500);font-size:11px">16:00 → 24:00</span></label>'+
+          '<label><input type="radio" name="rostQAtype" value="night"> 🌙 Night <span style="color:var(--g500);font-size:11px">20:00 → 08:00 (+1d)</span></label>'+
+          '<label><input type="radio" name="rostQAtype" value="24h"> 🕐 24h <span style="color:var(--g500);font-size:11px">08:00 → 08:00 (+1d · 24h)</span></label>'+
+        '</div>'+
+        '<div style="text-align:right;margin-top:10px">'+
+          '<button class="btn bp btn-sm" onclick="_rostQuickAssignFromPopover(\''+safeStaff+'\',\''+safeDate+'\',\''+safeBranch+'\')" style="font-size:12px">💾 Assign</button>'+
+        '</div>'+
+        '</div>';
+    }
+    bodyHTML = '<div style="padding:14px;text-align:center;color:var(--g500)">📅 OFF · No shift assigned for this day.</div>'+assignBlock;
   } else {
     bodyHTML = shifts.map(function(sh){
       const rangeLbl = (typeof _shiftRangeLabelFull==='function') ? _shiftRangeLabelFull(sh) : ((sh.startTime||'')+'–'+(sh.endTime||''));
@@ -5485,8 +5515,17 @@ function _rosterCellPopover(shifts, staffId, dateISO){
       const statusBadge = sh.status==='cancelled'
         ? '<span class="bdg bred" style="font-size:10px">✕ cancelled</span>'
         : (sh.status==='published' ? '<span class="bdg bg" style="font-size:10px">✅ published</span>' : '<span class="bdg ba" style="font-size:10px">🟡 planned</span>');
-      const editBtn = (typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule') || (hasPerm('hr.shifts.schedule.ownBranch') && sh.branch===CU.branch)) && sh.status!=='cancelled')
+      const shiftEditAllowed = canManage && sh.status!=='cancelled';
+      const editBtn = shiftEditAllowed
         ? '<button class="btn bs btn-sm" onclick="_rosterClosePopover(); openEditShiftModal(\''+sh.id+'\')" style="font-size:11px">✏️ Edit</button>'
+        : '';
+      // [Phase HR1c.4b] Per-shift Remove button (nurse · canManage · regardless of cancelled · the user's assignment can always be soft-removed)
+      const myAssign = co.find(function(a){ return a.userId===staffId && a.status!=='removed'; });
+      const removeBtn = (canManage && isNurseUser && myAssign)
+        ? '<button class="btn brd btn-sm" onclick="_rosterCellRemoveOne(\''+myAssign.id+'\')" style="font-size:11px;margin-right:4px">✕ Remove</button>'
+        : '';
+      const actionRow = (removeBtn || editBtn)
+        ? '<div style="text-align:right;margin-top:8px">'+removeBtn+editBtn+'</div>'
         : '';
       return '<div style="border:1px solid var(--g200);border-radius:6px;padding:10px;margin-bottom:8px">'+
         '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:6px">'+
@@ -5497,9 +5536,19 @@ function _rosterCellPopover(shifts, staffId, dateISO){
         '<div style="font-size:12px"><strong>👨‍⚕️ Doctor:</strong> '+doctorLabel+'</div>'+
         '<div style="margin-top:6px;font-size:12px"><strong>Other staff:</strong></div>'+
         '<ul style="margin:4px 0 0 0;padding-left:18px;font-size:12px">'+coList+'</ul>'+
-        (editBtn ? '<div style="text-align:right;margin-top:8px">'+editBtn+'</div>' : '')+
+        actionRow+
         '</div>';
     }).join('');
+    // [Phase HR1c.4b] Whole-day OFF · removes ALL active assignments on this day for this nurse
+    const hasAnyActiveMine = shifts.some(function(sh){
+      const co = (typeof getAssignmentsByShift==='function') ? getAssignmentsByShift(sh.id, false) : [];
+      return co.some(function(a){ return a.userId===staffId && a.status!=='removed'; });
+    });
+    if(editAllowed && hasAnyActiveMine){
+      bodyHTML += '<div style="border-top:1px solid var(--g200);margin-top:10px;padding-top:10px;text-align:right">'+
+        '<button class="btn brd btn-sm" onclick="_rosterCellOffWholeDay(\''+safeStaff+'\',\''+safeDate+'\',\''+safeBranch+'\')" style="font-size:12px">✕ OFF entire day</button>'+
+        '</div>';
+    }
   }
   // Build the popover (reuse .mbd/.modal/.mhdr/.mbody — HR1c.2a-compatible)
   const popHTML = '<div class="mbd open" id="rostPopover">'+
@@ -5516,6 +5565,13 @@ function _rosterCellPopover(shifts, staffId, dateISO){
   wrap.innerHTML = popHTML;
   document.body.appendChild(wrap.firstChild);
 }
+// [Phase HR1c.4b] Reads the selected shift-type radio from the popover, then delegates to _rosterCellAssign.
+function _rostQuickAssignFromPopover(staffId, dateISO, branch){
+  const radio = document.querySelector('input[name="rostQAtype"]:checked');
+  if(!radio){ if(typeof toast==='function') toast('Select a shift type','warn'); return; }
+  if(typeof _rosterCellAssign==='function') _rosterCellAssign(staffId, dateISO, branch, radio.value);
+}
+window._rostQuickAssignFromPopover = _rostQuickAssignFromPopover;
 function _rosterClosePopover(){
   const m = document.getElementById('rostPopover');
   if(m && m.parentNode) m.parentNode.removeChild(m);
@@ -5624,6 +5680,419 @@ window._rosterExportCSV     = _rosterExportCSV;
 window._setSchedView        = _setSchedView;
 window._getSchedView        = _getSchedView;
 
+// ════════════════════════════════════════════
+// [Phase HR1c.4b] Cell Quick-Edit + Apply Pattern (write paths)
+// ════════════════════════════════════════════
+// Adds the FIRST write paths to the Monthly Roster. All writes delegate to existing HR1c.2
+// helpers (saveShiftSchedules / _pushShiftSchedule / addShiftAssignment / removeShiftAssignment) —
+// zero new Supabase plumbing · zero DDL · zero RLS. Reuses HR1c.2's stable id `SS-{branch}-{YYYYMMDD}-{type}`
+// for idempotent UPSERTs. Doctor cells stay read-only (HR1c.4a.1 made the roster nurses-only).
+
+// [Phase HR1c.4b] Default shift times per shift-type · single source of truth for cell + pattern auto-create.
+// Matches Create Shift modal defaults (line ~5288).
+const _HR1C4_DEFAULT_SHIFT_TIMES = {
+  morning: { start: '08:00:00', end: '16:00:00' },
+  evening: { start: '16:00:00', end: '24:00:00' },
+  night:   { start: '20:00:00', end: '08:00:00' },
+  '24h':   { start: '08:00:00', end: '08:00:00' }
+};
+window._HR1C4_DEFAULT_SHIFT_TIMES = _HR1C4_DEFAULT_SHIFT_TIMES;
+
+// Idempotent upsert: returns shiftId. Creates the shift with default times if missing,
+// un-cancels if previously cancelled (per D13 plan decision).
+async function _rosterUpsertShiftIfMissing(branch, dateISO, shiftType){
+  if(!branch || !dateISO || !shiftType) return null;
+  if(!_HR1C4_DEFAULT_SHIFT_TIMES[shiftType]) return null;
+  const id = (typeof _schedShiftId==='function') ? _schedShiftId(branch, dateISO, shiftType) : null;
+  if(!id) return null;
+  const all = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
+  const idx = all.findIndex(function(s){ return s && s.id===id; });
+  const nowISO = new Date().toISOString();
+  if(idx >= 0){
+    // Existing shift · un-cancel if cancelled (D13)
+    if(all[idx].status === 'cancelled'){
+      all[idx].status = 'planned';
+      all[idx].updatedAt = nowISO;
+      if(typeof saveShiftSchedules==='function') saveShiftSchedules(all);
+      if(typeof _pushShiftSchedule==='function') await _pushShiftSchedule(all[idx]);
+    }
+    return id;
+  }
+  // Create new shift with default times
+  const t = _HR1C4_DEFAULT_SHIFT_TIMES[shiftType];
+  const row = {
+    id: id, branch: branch, date: dateISO, shiftType: shiftType,
+    startTime: t.start, endTime: t.end,
+    doctorUserId: null,
+    status: 'planned',
+    notes: null,
+    createdBy: (typeof CU!=='undefined' && CU) ? CU.id : null,
+    createdAt: nowISO,
+    updatedAt: nowISO
+  };
+  all.push(row);
+  if(typeof saveShiftSchedules==='function') saveShiftSchedules(all);
+  if(typeof _pushShiftSchedule==='function') await _pushShiftSchedule(row);
+  return id;
+}
+window._rosterUpsertShiftIfMissing = _rosterUpsertShiftIfMissing;
+
+// Quick-assign a nurse to a (branch, date, shift-type) cell. Auto-creates the shift if missing.
+// Permission gate matches Create Shift (admin/hr_manager all branches · head_nurse own branch).
+async function _rosterCellAssign(staffId, dateISO, branch, shiftType){
+  if(!staffId || !dateISO || !branch || !shiftType){ if(typeof toast==='function') toast('Missing required fields','err'); return; }
+  // Permission gate
+  const canManage = (typeof hasPerm==='function' && (
+    hasPerm('hr.shifts.schedule') ||
+    (hasPerm('hr.shifts.schedule.ownBranch') && branch===CU.branch)
+  ));
+  if(!canManage){ if(typeof toast==='function') toast('Permission denied for this branch','err'); return; }
+  // Validate user is an active nurse (HR1c.4a.1 nursing-only constraint)
+  const usersAll = (typeof getUsers==='function')?getUsers():[];
+  const u = usersAll.find(function(x){ return x && x.id===staffId; });
+  if(!u){ if(typeof toast==='function') toast('User not found','err'); return; }
+  if(u.role !== 'nurse'){ if(typeof toast==='function') toast('Only nurses can be quick-assigned · use Edit Shift modal for doctors','warn'); return; }
+  if(u.active === false){ if(typeof toast==='function') toast('Cannot assign disabled user','err'); return; }
+  // Skip if already assigned (any active assignment on this date+branch+type)
+  const allShifts = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
+  const allAssigns = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
+  const expectedShiftId = (typeof _schedShiftId==='function') ? _schedShiftId(branch, dateISO, shiftType) : null;
+  const already = allAssigns.find(function(a){ return a && a.shiftId===expectedShiftId && a.userId===staffId && a.status!=='removed'; });
+  if(already){ if(typeof toast==='function') toast('Already assigned to this shift','warn'); _rosterClosePopover(); return; }
+  // Upsert shift + add nurse assignment via existing HR1c.2 write path
+  const shiftId = await _rosterUpsertShiftIfMissing(branch, dateISO, shiftType);
+  if(!shiftId){ if(typeof toast==='function') toast('Failed to create/find shift','err'); return; }
+  const staffName = u.name || u.username || u.id;
+  if(typeof addShiftAssignment==='function'){
+    await addShiftAssignment(shiftId, staffId, 'nurse', staffName, /*silent=*/true);
+  }
+  if(typeof logAccess==='function') logAccess('hr.shift.cell_assign', shiftId, branch+'|'+dateISO+'|'+shiftType+'|'+staffId);
+  if(typeof toast==='function') toast('✅ '+staffName+' assigned · '+shiftType,'ok');
+  _rosterClosePopover();
+  if(typeof _rosterFilterChange==='function') _rosterFilterChange();
+}
+window._rosterCellAssign = _rosterCellAssign;
+
+// Remove a single assignment (per-shift OFF). Wraps existing removeShiftAssignment + Month-grid re-render.
+async function _rosterCellRemoveOne(assignmentId){
+  if(!assignmentId) return;
+  if(typeof removeShiftAssignment==='function'){
+    await removeShiftAssignment(assignmentId);  // existing · prompts confirm · soft-delete · pushes · audits hr.shift.assignment.removed
+  }
+  // removeShiftAssignment calls _schedFilterChange (Day-mode) but we also need Month-grid refresh
+  _rosterClosePopover();
+  if(typeof _rosterFilterChange==='function') _rosterFilterChange();
+}
+window._rosterCellRemoveOne = _rosterCellRemoveOne;
+
+// OFF entire day · removes ALL of this user's assignments on this (branch, dateISO).
+// Single confirm dialog · silent loop. Audit `hr.shift.cell_off` with scope='day'.
+async function _rosterCellOffWholeDay(staffId, dateISO, branch){
+  if(!staffId || !dateISO || !branch) return;
+  // Permission gate
+  const canManage = (typeof hasPerm==='function' && (
+    hasPerm('hr.shifts.schedule') ||
+    (hasPerm('hr.shifts.schedule.ownBranch') && branch===CU.branch)
+  ));
+  if(!canManage){ if(typeof toast==='function') toast('Permission denied','err'); return; }
+  // Find all shifts in (branch, date) and the user's active assignments on those shifts
+  const allShifts = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
+  const allAssigns = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
+  const dayBefore = (typeof _addDaysISO==='function') ? _addDaysISO(dateISO, -1) : dateISO;
+  const shiftIdsForDay = new Set();
+  allShifts.forEach(function(s){
+    if(!s || s.branch !== branch) return;
+    const sameDay = s.date === dateISO;
+    const fromYesterday = s.date === dayBefore && (
+      (typeof _shiftIsOvernight==='function' && _shiftIsOvernight(s)) ||
+      (typeof _shiftIs24h==='function' && _shiftIs24h(s))
+    );
+    if(sameDay || fromYesterday) shiftIdsForDay.add(s.id);
+  });
+  const targets = allAssigns.filter(function(a){
+    return a && a.userId===staffId && a.status!=='removed' && shiftIdsForDay.has(a.shiftId);
+  });
+  if(!targets.length){ if(typeof toast==='function') toast('No active assignments to remove','warn'); return; }
+  const usersAll = (typeof getUsers==='function')?getUsers():[];
+  const u = usersAll.find(function(x){ return x && x.id===staffId; });
+  const staffName = (u && (u.name||u.username)) || staffId;
+  let dateLbl = dateISO; try { dateLbl = new Date(dateISO+'T00:00:00').toLocaleDateString('en-GB',{day:'2-digit',month:'short',year:'numeric'}); } catch(e){}
+  if(!confirm('Remove '+staffName+' from ALL '+targets.length+' shift'+(targets.length===1?'':'s')+' on '+dateLbl+'?')) return;
+  // Loop: soft-remove each · push to Supabase
+  for(const a of targets){
+    a.status = 'removed';
+  }
+  if(typeof saveShiftAssignments==='function') saveShiftAssignments(allAssigns);
+  for(const a of targets){
+    if(typeof _pushShiftAssignment==='function') await _pushShiftAssignment(a);
+    if(typeof logAccess==='function') logAccess('hr.shift.cell_off', a.id, 'scope=day|'+branch+'|'+dateISO+'|'+staffId);
+  }
+  if(typeof toast==='function') toast('✕ '+staffName+' OFF · '+targets.length+' shift'+(targets.length===1?'':'s')+' removed','ok');
+  _rosterClosePopover();
+  if(typeof _rosterFilterChange==='function') _rosterFilterChange();
+}
+window._rosterCellOffWholeDay = _rosterCellOffWholeDay;
+
+// ════════════════════════════════════════════
+// [Phase HR1c.4b] Apply Pattern modal + handlers
+// ════════════════════════════════════════════
+// Bulk-create shifts for selected nurses across selected weekdays in a date range.
+// All writes via existing HR1c.2 paths (saveShiftSchedule's primitives + addShiftAssignment).
+// Idempotent via stable id `SS-{branch}-{YYYYMMDD}-{type}` so re-runs are no-ops.
+// Permission gate same as Create Shift. Doctor support deferred to HR1c.4d (publish flow).
+
+// Apply Pattern modal HTML · same .mbd/.modal/.mhdr/.mbody classes as HR1c.2a-compatible.
+function _schedRenderApplyPatternModal(){
+  return '<div class="mbd" id="applyPatternModal">'+
+    '<div class="modal" style="max-width:560px;width:92vw;max-height:90vh;overflow:auto">'+
+      '<div class="mhdr"><div class="mt">🔁 Apply Pattern</div>'+
+      '<button class="mc" onclick="closeApplyPatternModal()">×</button></div>'+
+      '<div class="mbody" style="padding:16px">'+
+        '<div style="font-size:11px;color:var(--g600);margin-bottom:8px">Bulk assign nurses to a recurring weekday pattern within a date range. Existing shifts are reused (idempotent). Doctors are managed via Edit Shift modal.</div>'+
+        '<div style="background:var(--g50);padding:8px 10px;border-radius:6px;margin-bottom:12px;font-size:12px;color:var(--g600)">'+
+          '<div><strong>Branch:</strong> <span id="ap_branch_lbl">—</span> <span style="font-size:10px;color:var(--g500)">(locked to current roster filter)</span></div>'+
+        '</div>'+
+        '<div style="margin-bottom:10px">'+
+          '<label style="font-size:11px;color:var(--g600);display:block;margin-bottom:4px">Nurses (active · select 1+)</label>'+
+          '<div id="ap_nurses" style="max-height:160px;overflow:auto;border:1px solid var(--g200);border-radius:6px;padding:6px;background:var(--g50);font-size:12px"></div>'+
+        '</div>'+
+        '<div style="margin-bottom:10px">'+
+          '<label style="font-size:11px;color:var(--g600);display:block;margin-bottom:4px">Shift type</label>'+
+          '<div style="display:flex;gap:8px;flex-wrap:wrap;font-size:12px">'+
+            '<label><input type="radio" name="ap_type" value="morning" checked onchange="_applyPatternUpdatePreview()"> 🌅 Morning</label>'+
+            '<label><input type="radio" name="ap_type" value="evening" onchange="_applyPatternUpdatePreview()"> 🌆 Evening</label>'+
+            '<label><input type="radio" name="ap_type" value="night" onchange="_applyPatternUpdatePreview()"> 🌙 Night</label>'+
+            '<label><input type="radio" name="ap_type" value="24h" onchange="_applyPatternUpdatePreview()"> 🕐 24h</label>'+
+          '</div>'+
+        '</div>'+
+        '<div style="margin-bottom:10px">'+
+          '<label style="font-size:11px;color:var(--g600);display:block;margin-bottom:4px">Weekdays (select 1+)</label>'+
+          '<div style="display:flex;gap:6px;flex-wrap:wrap;font-size:12px">'+
+            '<label><input type="checkbox" class="ap-dow" data-dow="1" checked onchange="_applyPatternUpdatePreview()"> Mon</label>'+
+            '<label><input type="checkbox" class="ap-dow" data-dow="2" checked onchange="_applyPatternUpdatePreview()"> Tue</label>'+
+            '<label><input type="checkbox" class="ap-dow" data-dow="3" checked onchange="_applyPatternUpdatePreview()"> Wed</label>'+
+            '<label><input type="checkbox" class="ap-dow" data-dow="4" checked onchange="_applyPatternUpdatePreview()"> Thu</label>'+
+            '<label><input type="checkbox" class="ap-dow" data-dow="5" checked onchange="_applyPatternUpdatePreview()"> Fri</label>'+
+            '<label><input type="checkbox" class="ap-dow" data-dow="6" onchange="_applyPatternUpdatePreview()"> Sat</label>'+
+            '<label><input type="checkbox" class="ap-dow" data-dow="0" onchange="_applyPatternUpdatePreview()"> Sun</label>'+
+          '</div>'+
+        '</div>'+
+        '<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">'+
+          '<div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">From</label>'+
+            '<input class="fsi" id="ap_from" type="date" oninput="_applyPatternUpdatePreview()"></div>'+
+          '<div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">To</label>'+
+            '<input class="fsi" id="ap_to" type="date" oninput="_applyPatternUpdatePreview()"></div>'+
+        '</div>'+
+        '<div id="ap_preview" style="background:var(--pf);border-radius:6px;padding:10px;margin-bottom:10px;font-size:12px;color:var(--g700);min-height:36px">Preview: select staff + weekdays + date range</div>'+
+        '<div id="ap_progress" style="display:none;margin-bottom:10px;font-size:12px"></div>'+
+        '<div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">'+
+          '<button class="btn bs" id="ap_cancel" onclick="closeApplyPatternModal()">Cancel</button>'+
+          '<button class="btn bp" id="ap_apply" onclick="applyPatternExecute()">💾 Apply Pattern</button>'+
+        '</div>'+
+      '</div>'+
+    '</div></div>';
+}
+
+// Open Apply Pattern modal · pre-fills branch + nurses from current roster filter.
+function openApplyPatternModal(){
+  const m = document.getElementById('applyPatternModal');
+  if(!m){ if(typeof toast==='function') toast('Open Schedules page first','warn'); return; }
+  // Permission gate (same as Create Shift)
+  const branchEl = document.getElementById('rostBranch');
+  const allowed = (typeof _schedAllowedBranches==='function') ? _schedAllowedBranches() : [];
+  const branch = (branchEl && branchEl.value) ? branchEl.value : (allowed[0]||'');
+  if(!branch){ if(typeof toast==='function') toast('No branch selected','warn'); return; }
+  const canManage = (typeof hasPerm==='function' && (
+    hasPerm('hr.shifts.schedule') ||
+    (hasPerm('hr.shifts.schedule.ownBranch') && branch===CU.branch)
+  ));
+  if(!canManage){ if(typeof toast==='function') toast('Permission denied for this branch','err'); return; }
+  // Populate locked branch label
+  const branchName = (typeof getBr==='function') ? (getBr(branch).name||branch) : branch;
+  const lbl = document.getElementById('ap_branch_lbl');
+  if(lbl) lbl.textContent = branchName+' ('+branch+')';
+  // Stash branch on modal for handlers
+  m.dataset.branch = branch;
+  // Populate nurse multi-select (active nurses · home-branch matching OR cross-branch staff candidates)
+  const usersAll = (typeof getUsers==='function')?getUsers():[];
+  const nurses = usersAll.filter(function(u){ return u && u.role==='nurse' && u.active!==false; })
+    .sort(function(a,b){ return (a.name||a.username||a.id||'').localeCompare(b.name||b.username||b.id||''); });
+  const list = document.getElementById('ap_nurses');
+  if(list){
+    if(!nurses.length){
+      list.innerHTML = '<div style="color:var(--g500);padding:4px">No active nurses · use Users & Access page to add nurses</div>';
+    } else {
+      list.innerHTML = nurses.map(function(n){
+        const branchNote = (n.branch && n.branch!=='all' && n.branch!==branch)
+          ? ' <span style="font-size:10px;color:var(--g500)">(home: '+(getBr(n.branch).name||n.branch)+')</span>'
+          : '';
+        const dispName = (n.name||n.username||n.id||'').replace(/"/g,'&quot;');
+        return '<label style="display:block;padding:3px 0"><input type="checkbox" class="ap-nurse-cb" data-uid="'+n.id+'" data-name="'+dispName+'" onchange="_applyPatternUpdatePreview()"> '+(n.name||n.username||n.id)+branchNote+'</label>';
+      }).join('');
+    }
+  }
+  // Default date range = current month bounds (YYYY-MM-01 .. YYYY-MM-{last})
+  const monthEl = document.getElementById('rostMonth');
+  const today = new Date();
+  const ymCur = today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0');
+  const ym = (monthEl && monthEl.value) ? monthEl.value : ymCur;
+  const m1 = /^(\d{4})-(\d{2})$/.exec(ym);
+  if(m1){
+    const lastDayMs = Date.UTC(+m1[1], +m1[2], 0);  // 0-day of next month = last day of current
+    const lastDt = new Date(lastDayMs);
+    const lastDom = String(lastDt.getUTCDate()).padStart(2,'0');
+    const fromEl = document.getElementById('ap_from'); if(fromEl) fromEl.value = ym+'-01';
+    const toEl   = document.getElementById('ap_to');   if(toEl)   toEl.value   = ym+'-'+lastDom;
+  }
+  // Reset progress + apply button enabled
+  const prog = document.getElementById('ap_progress'); if(prog){ prog.style.display='none'; prog.innerHTML=''; }
+  const applyBtn = document.getElementById('ap_apply'); if(applyBtn) applyBtn.disabled = false;
+  const cancelBtn = document.getElementById('ap_cancel'); if(cancelBtn) cancelBtn.disabled = false;
+  m.classList.add('open');
+  // Initial preview
+  if(typeof _applyPatternUpdatePreview==='function') _applyPatternUpdatePreview();
+}
+function closeApplyPatternModal(){
+  const m = document.getElementById('applyPatternModal');
+  if(m){ m.classList.remove('open'); delete m.dataset.branch; }
+}
+window.openApplyPatternModal  = openApplyPatternModal;
+window.closeApplyPatternModal = closeApplyPatternModal;
+
+// Compute preview count from current form state · updates the preview line.
+function _applyPatternUpdatePreview(){
+  try {
+    const previewEl = document.getElementById('ap_preview');
+    if(!previewEl) return;
+    const fromStr = (document.getElementById('ap_from')?.value||'').trim();
+    const toStr   = (document.getElementById('ap_to')?.value||'').trim();
+    const dowChecked = Array.from(document.querySelectorAll('.ap-dow:checked')).map(function(c){ return parseInt(c.dataset.dow,10); });
+    const staffChecked = Array.from(document.querySelectorAll('.ap-nurse-cb:checked'));
+    const typeEl = document.querySelector('input[name="ap_type"]:checked');
+    if(!fromStr || !toStr){ previewEl.innerHTML = 'Preview: pick a date range'; return; }
+    if(fromStr > toStr){ previewEl.innerHTML = '⚠ "From" must be on or before "To"'; return; }
+    if(!dowChecked.length){ previewEl.innerHTML = '⚠ Select at least one weekday'; return; }
+    if(!staffChecked.length){ previewEl.innerHTML = '⚠ Select at least one nurse'; return; }
+    if(!typeEl){ previewEl.innerHTML = '⚠ Pick a shift type'; return; }
+    // Count matching dates
+    const dates = _applyPatternEnumerateDates(fromStr, toStr, dowChecked);
+    const shiftCount = dates.length;
+    const assignCount = dates.length * staffChecked.length;
+    const typeIcons = {morning:'🌅', evening:'🌆', night:'🌙', '24h':'🕐'};
+    const typeLbl = (typeIcons[typeEl.value]||'')+' '+typeEl.value;
+    previewEl.innerHTML = '<div><strong>Preview:</strong> '+staffChecked.length+' staff × '+dowChecked.length+' weekday'+(dowChecked.length===1?'':'s')+
+      ' over '+shiftCount+' day'+(shiftCount===1?'':'s')+' · '+typeLbl+'</div>'+
+      '<div style="font-size:11px;color:var(--g600);margin-top:2px">= '+shiftCount+' shift'+(shiftCount===1?'':'s')+' created/updated · '+assignCount+' assignment'+(assignCount===1?'':'s')+' added</div>';
+  } catch(e){ /* silent · preview is best-effort */ }
+}
+window._applyPatternUpdatePreview = _applyPatternUpdatePreview;
+
+// Pure helper · enumerates dates in [fromISO..toISO] that match selected weekdays (0=Sun, 1=Mon, ..., 6=Sat).
+// UTC-anchored to avoid Egypt-TZ rolling.
+function _applyPatternEnumerateDates(fromISO, toISO, dowSet){
+  const out = [];
+  if(!fromISO || !toISO) return out;
+  const mF = /^(\d{4})-(\d{2})-(\d{2})/.exec(fromISO);
+  const mT = /^(\d{4})-(\d{2})-(\d{2})/.exec(toISO);
+  if(!mF || !mT) return out;
+  let cur = Date.UTC(+mF[1], +mF[2]-1, +mF[3]);
+  const end = Date.UTC(+mT[1], +mT[2]-1, +mT[3]);
+  if(cur > end) return out;
+  const dowAllowed = new Set(dowSet || []);
+  const guard = 400; // 400-day max range as a safety bound (more than a year)
+  let count = 0;
+  while(cur <= end && count < guard){
+    const dt = new Date(cur);
+    const dow = dt.getUTCDay(); // 0=Sun, 1=Mon, ..., 6=Sat
+    if(dowAllowed.has(dow)){
+      const yyyy = dt.getUTCFullYear();
+      const mm = String(dt.getUTCMonth()+1).padStart(2,'0');
+      const dd = String(dt.getUTCDate()).padStart(2,'0');
+      out.push(yyyy+'-'+mm+'-'+dd);
+    }
+    cur += 86400000;
+    count++;
+  }
+  return out;
+}
+window._applyPatternEnumerateDates = _applyPatternEnumerateDates;
+
+// Execute the Apply Pattern batch · sequential awaits with in-modal progress · post-batch conflict re-check.
+async function applyPatternExecute(){
+  const m = document.getElementById('applyPatternModal');
+  if(!m) return;
+  const branch = (m.dataset && m.dataset.branch) ? m.dataset.branch : '';
+  if(!branch){ if(typeof toast==='function') toast('No branch','err'); return; }
+  // Permission re-check
+  const canManage = (typeof hasPerm==='function' && (
+    hasPerm('hr.shifts.schedule') ||
+    (hasPerm('hr.shifts.schedule.ownBranch') && branch===CU.branch)
+  ));
+  if(!canManage){ if(typeof toast==='function') toast('Permission denied','err'); return; }
+  // Read form
+  const fromStr = (document.getElementById('ap_from')?.value||'').trim();
+  const toStr   = (document.getElementById('ap_to')?.value||'').trim();
+  const typeEl  = document.querySelector('input[name="ap_type"]:checked');
+  const shiftType = typeEl ? typeEl.value : '';
+  const dowChecked = Array.from(document.querySelectorAll('.ap-dow:checked')).map(function(c){ return parseInt(c.dataset.dow,10); });
+  const staffCbs = Array.from(document.querySelectorAll('.ap-nurse-cb:checked'));
+  if(!fromStr || !toStr || fromStr > toStr){ if(typeof toast==='function') toast('Invalid date range','err'); return; }
+  if(!shiftType){ if(typeof toast==='function') toast('Pick a shift type','err'); return; }
+  if(!dowChecked.length){ if(typeof toast==='function') toast('Select at least one weekday','err'); return; }
+  if(!staffCbs.length){ if(typeof toast==='function') toast('Select at least one nurse','err'); return; }
+  const staff = staffCbs.map(function(cb){ return { id:cb.dataset.uid, name:cb.dataset.name||cb.dataset.uid }; });
+  // Enumerate dates
+  const dates = _applyPatternEnumerateDates(fromStr, toStr, dowChecked);
+  if(!dates.length){ if(typeof toast==='function') toast('No matching dates','err'); return; }
+  // Disable buttons during execution
+  const applyBtn = document.getElementById('ap_apply'); if(applyBtn) applyBtn.disabled = true;
+  const cancelBtn = document.getElementById('ap_cancel'); if(cancelBtn) cancelBtn.disabled = true;
+  const prog = document.getElementById('ap_progress');
+  const totalShifts = dates.length;
+  const totalAssigns = dates.length * staff.length;
+  let createdShifts = 0;
+  let addedAssigns = 0;
+  for(let i=0;i<dates.length;i++){
+    const d = dates[i];
+    if(prog){ prog.style.display='block'; prog.innerHTML = '⏳ Creating shift '+(i+1)+' of '+totalShifts+' · '+d+' · '+shiftType; }
+    const shiftId = await _rosterUpsertShiftIfMissing(branch, d, shiftType);
+    if(!shiftId) continue;
+    createdShifts++;
+    for(const p of staff){
+      // addShiftAssignment is silent · idempotent for already-assigned via removeShiftAssignment's check
+      if(typeof addShiftAssignment==='function'){
+        const ok = await addShiftAssignment(shiftId, p.id, 'nurse', p.name, /*silent=*/true);
+        if(ok) addedAssigns++;
+      }
+    }
+  }
+  if(typeof logAccess==='function') logAccess('hr.shift.pattern_applied', '', branch+'|'+fromStr+'..'+toStr+'|'+shiftType+'|dows='+dowChecked.join(',')+'|staff='+staff.length+'|shifts='+createdShifts+'|assigns='+addedAssigns);
+  if(typeof toast==='function') toast('✅ Pattern applied · '+createdShifts+' shifts · '+addedAssigns+' assignments added','ok');
+  // Post-batch conflict re-check (Q1)
+  try {
+    const flagged = [];
+    for(const p of staff){
+      const seen = new Set();
+      for(const d of dates){
+        if(seen.has(d)) continue;
+        seen.add(d);
+        const conflicts = (typeof findShiftConflicts==='function') ? findShiftConflicts(p.id, d) : [];
+        if(conflicts && conflicts.length){
+          flagged.push(p.name+' on '+d+' ×'+conflicts.length);
+          break; // one flag per staff is enough · avoid spam
+        }
+      }
+    }
+    if(flagged.length && typeof toast==='function'){
+      toast('⚠ Conflicts after pattern: '+flagged.slice(0,3).join(' · ')+(flagged.length>3?(' · +'+(flagged.length-3)+' more'):''),'warn');
+    }
+  } catch(e){ /* silent · conflict re-check is best-effort */ }
+  closeApplyPatternModal();
+  if(typeof _rosterFilterChange==='function') _rosterFilterChange();
+}
+window.applyPatternExecute = applyPatternExecute;
+window._schedRenderApplyPatternModal = _schedRenderApplyPatternModal;
+
 // Main page renderer
 function renderSchedulesPage(){
   if(typeof hasPerm==='function' && !hasPerm('hr.shifts.schedule') && !hasPerm('hr.shifts.schedule.ownBranch')){
@@ -5696,6 +6165,7 @@ function renderSchedulesPage(){
       <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">🏥 Branch</label>
         <select class="fsi" id="rostBranch" onchange="_rosterFilterChange()" ${isOwnBranchOnly?'disabled':''} style="width:200px">${branchOpts}</select></div>
       <div style="display:flex;gap:6px;align-items:flex-end">
+        ${/* [Phase HR1c.4b] Apply Pattern button · only visible when user has scheduling permission */ (typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule')||hasPerm('hr.shifts.schedule.ownBranch')))?`<button class="btn bs btn-sm" onclick="openApplyPatternModal()">🔁 Apply Pattern</button>`:''}
         <button class="btn bs btn-sm" onclick="_rosterPrint()">🖨 Print</button>
         <button class="btn bs btn-sm" onclick="_rosterExportCSV()">📊 CSV</button>
       </div>
@@ -5708,6 +6178,7 @@ function renderSchedulesPage(){
   ${_schedRenderCreateModal()}
   ${_schedRenderAddStaffModal()}
   ${/* [Phase HR1c.2b] Edit Shift modal · sibling of Create + Add Staff modals */ _schedRenderEditModal()}
+  ${/* [Phase HR1c.4b] Apply Pattern modal · sibling of Create/AddStaff/Edit modals */ _schedRenderApplyPatternModal()}
   `;
 }
 
