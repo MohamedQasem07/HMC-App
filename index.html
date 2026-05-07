@@ -2816,6 +2816,8 @@ function toSnake(obj, table) {
     shiftType:'shift_type', startTime:'start_time', endTime:'end_time',
     doctorUserId:'doctor_user_id', shiftId:'shift_id',
     assignedBy:'assigned_by', assignedAt:'assigned_at',
+    // [Phase HR1c.4b.1a] Monthly roster staff field mappings
+    monthYm:'month_ym',
     // [Phase HR1b.1] Branch geofence + workday clock-in/out GPS field mappings
     branchId:'branch_id', radiusM:'radius_m',
     clockInLat:'clock_in_lat', clockInLng:'clock_in_lng', clockInAccuracyM:'clock_in_accuracy_m',
@@ -2899,6 +2901,10 @@ function toSnake(obj, table) {
     // [Phase HR1c.1] Shift assignments — per-staff rows linked to shift_schedules · soft-delete via status='removed'
     shift_assignments: new Set(['id','shift_id','user_id','staff_name','role','status',
       'assigned_by','assigned_at','notes']),
+    // [Phase HR1c.4b.1a] Monthly roster membership — explicit "show this nurse on this branch/month roster" rows
+    // Stable id `MRS-{branch}-{YYYYMM}-{user_id_hash}` · DB-level CHECK enforces role='nurse' (HR1c.4a.1) · soft-delete via status='removed'
+    monthly_roster_staff: new Set(['id','branch','month_ym','user_id','role','status',
+      'created_by','created_at','updated_at']),
   };
   const DATE_COLS = new Set(['ka_date','dob','arrival_date','departure_date','discharge_date',
     'invoice_date','collection_date','start_date','created_at','updated_at']);
@@ -2983,6 +2989,8 @@ function parseSnakeCase(obj) {
     shift_type:'shiftType', start_time:'startTime', end_time:'endTime',
     doctor_user_id:'doctorUserId', shift_id:'shiftId',
     assigned_by:'assignedBy', assigned_at:'assignedAt',
+    // [Phase HR1c.4b.1a] Monthly roster staff reverse mappings
+    month_ym:'monthYm',
     // [Phase HR1b.1] Branch geofence + workday GPS reverse mappings
     branch_id:'branchId', radius_m:'radiusM',
     clock_in_lat:'clockInLat', clock_in_lng:'clockInLng', clock_in_accuracy_m:'clockInAccuracyM',
@@ -3016,7 +3024,8 @@ async function syncFromSheets() {
     // [Session #7 fix] Added `nationalities` so the patient form is dynamic.
     // [Phase HR1b.1] Added `branch_geofence` for clock-in radius validation (HR1b.2)
     // [Phase HR1c.1] Added `shift_schedules` + `shift_assignments` for HR1c roster planning (UI ships in HR1c.2)
-    const [cases,staff,shifts,users,hotels,insurance,expenses,handovers,workdays,banks,nationalities,branchGeofences,shiftSchedules,shiftAssignments] = await Promise.all([
+    // [Phase HR1c.4b.1a] Added `monthly_roster_staff` for explicit roster membership (UI ships in HR1c.4b.1b)
+    const [cases,staff,shifts,users,hotels,insurance,expenses,handovers,workdays,banks,nationalities,branchGeofences,shiftSchedules,shiftAssignments,monthlyRosterStaff] = await Promise.all([
       sbAPI('GET','cases',null,'order=created_at.asc'),
       sbAPI('GET','staff',null,'order=name.asc'),
       sbAPI('GET','shifts',null,'order=start_time.desc&limit=200'),
@@ -3031,6 +3040,7 @@ async function syncFromSheets() {
       sbAPI('GET','branch_geofence',null,'active=eq.true&order=branch_id'),
       sbAPI('GET','shift_schedules',null,'order=date.desc&limit=500'),
       sbAPI('GET','shift_assignments',null,'limit=2000'),
+      sbAPI('GET','monthly_roster_staff',null,'status=eq.active&order=updated_at.desc&limit=2000'),
     ]);
     if(Array.isArray(nationalities) && nationalities.length){
       const list = nationalities.map(n => n.name_en).filter(Boolean);
@@ -3105,6 +3115,10 @@ async function syncFromSheets() {
     }
     if(shiftAssignments && Array.isArray(shiftAssignments)){
       sl('hmc_shift_assignments', JSON.stringify(shiftAssignments.map(parseSnakeCase)));
+    }
+    // [Phase HR1c.4b.1a] Cache monthly_roster_staff (active rows only) for HR1c.4b.1b Show Nurse UI.
+    if(monthlyRosterStaff && Array.isArray(monthlyRosterStaff)){
+      sl('hmc_monthly_roster_staff', JSON.stringify(monthlyRosterStaff.map(parseSnakeCase)));
     }
     sl('hmc_last_sync',new Date().toLocaleString('en-GB'));
     // [Phase E1.1] One-time drain of any pre-fix asset queue / unsynced local assets.
@@ -5337,6 +5351,45 @@ async function _pushShiftAssignment(row){
   try { return await sbAPI('POST','shift_assignments', toSnake(row,'shift_assignments')); }
   catch(e){ console.warn('_pushShiftAssignment:',e); return null; }
 }
+
+// ════════════════════════════════════════════
+// [Phase HR1c.4b.1a] Monthly roster membership · cache helpers + stable id + push
+// ════════════════════════════════════════════
+// Read/write API for `public.monthly_roster_staff`. Used by HR1c.4b.1b "Show Nurse" UI.
+// No UI behavior change in HR1c.4b.1a — these are pure plumbing helpers exposed on window.*
+// for future consumers. localStorage cache is hydrated from Supabase on init (above).
+// Stable id format: `MRS-{branch}-{YYYYMM}-{userIdShort}` matches existing convention (SS-/SA-/BG-).
+
+function getMonthlyRosterStaff(){ return JSON.parse(ls('hmc_monthly_roster_staff')||'[]'); }
+function saveMonthlyRosterStaff(d){ sl('hmc_monthly_roster_staff', JSON.stringify(d||[])); }
+
+// Stable id: `MRS-{branch}-{YYYYMM}-{userIdShort}` · idempotent UPSERT key matching the partial unique
+// index on (branch, month_ym, user_id) WHERE status='active'.
+function _schedRosterMembershipId(branch, monthYM, userId){
+  const ym = String(monthYM||'').replace(/-/g,'');
+  const uShort = String(userId||'').replace(/[^A-Za-z0-9]/g,'').substring(0,12);
+  return 'MRS-'+(branch||'')+'-'+ym+'-'+uShort;
+}
+
+async function _pushMonthlyRosterStaff(row){
+  try { return await sbAPI('POST','monthly_roster_staff', toSnake(row,'monthly_roster_staff')); }
+  catch(e){ console.warn('_pushMonthlyRosterStaff:',e); return null; }
+}
+
+// Filtered cache read · returns active membership rows for a (branch, monthYM) — used by _rosterStaffRows extension in HR1c.4b.1b.
+function getRosterMembershipFor(branch, monthYM){
+  if(!branch || !monthYM) return [];
+  const all = getMonthlyRosterStaff();
+  return all.filter(function(r){
+    return r && r.branch===branch && r.monthYm===monthYM && r.status!=='removed';
+  });
+}
+
+window.getMonthlyRosterStaff   = getMonthlyRosterStaff;
+window.saveMonthlyRosterStaff  = saveMonthlyRosterStaff;
+window._schedRosterMembershipId = _schedRosterMembershipId;
+window._pushMonthlyRosterStaff = _pushMonthlyRosterStaff;
+window.getRosterMembershipFor  = getRosterMembershipFor;
 
 // Branch picker scoping helper
 function _schedAllowedBranches(){
