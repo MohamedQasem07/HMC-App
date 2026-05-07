@@ -3424,31 +3424,184 @@ function getMyUpcomingShifts(userId, daysAhead){
     merged.push(s);
   });
   return merged.filter(function(s){
-    return s && s.date >= today && s.date <= future;
+    if(!s) return false;
+    // [Phase HR1c.2b] Use endDate-aware window so overnight shifts that started yesterday
+    // but are still active today appear in "upcoming". A shift's date is its START date.
+    const endDateISO = (typeof _shiftEndDateISO==='function') ? _shiftEndDateISO(s) : s.date;
+    return endDateISO >= today && s.date <= future;
   }).sort(function(a,b){
     return (a.date+(a.startTime||'')).localeCompare(b.date+(b.startTime||''));
   });
 }
 
-// Find time-range conflicts: same user assigned to overlapping shifts on same date (any branches).
+// ════════════════════════════════════════════
+// [Phase HR1c.2b] Overnight / 24h shift time-arithmetic helpers
+// ════════════════════════════════════════════
+// Pure functions used by findShiftConflicts, getMyUpcomingShifts (HR1c.2b patch),
+// renderShiftCard, Create Shift modal hint, Edit Shift modal hint, and (future)
+// HR1c.4 Monthly Roster. Zero side effects · zero data writes.
+// Convention: shift.date = START date · end date is DERIVED when end <= start.
+function _addDaysISO(dateISO, n){
+  if(!dateISO) return dateISO;
+  // [Phase HR1c.2b] UTC-anchored arithmetic — date strings have no timezone, so we must
+  // not let local-TZ midnight cross the UTC date line. (Egypt is UTC+2/+3 → naive
+  // `new Date('2026-05-06T00:00:00').setDate(+1).toISOString().split('T')[0]` returns the
+  // SAME day, not the next day.)
+  const m = /^(\d{4})-(\d{2})-(\d{2})/.exec(dateISO);
+  if(!m) return dateISO;
+  const ms = Date.UTC(+m[1], +m[2]-1, +m[3]) + (n||0)*86400000;
+  const dt = new Date(ms);
+  const yyyy = dt.getUTCFullYear();
+  const mm = String(dt.getUTCMonth()+1).padStart(2,'0');
+  const dd = String(dt.getUTCDate()).padStart(2,'0');
+  return yyyy+'-'+mm+'-'+dd;
+}
+function _shiftIsOvernight(s){
+  if(!s || !s.startTime || !s.endTime) return false;
+  // Overnight when end <= start (string compare on 'HH:MM' or 'HH:MM:SS' is correct lexicographically).
+  return s.endTime <= s.startTime;
+}
+function _shiftIs24h(s){
+  if(!s) return false;
+  if(s.shiftType === '24h') return true;
+  // Data-shape detection: identical start/end times = 24-hour shift.
+  return !!(s.startTime && s.endTime && s.startTime === s.endTime);
+}
+function _shiftEndDateISO(s){
+  if(!s || !s.date) return s ? s.date : null;
+  return (_shiftIsOvernight(s) || _shiftIs24h(s)) ? _addDaysISO(s.date, 1) : s.date;
+}
+function _shiftStartTimestampMs(s){
+  if(!s || !s.date) return 0;
+  const t = (s.startTime||'00:00').length===5 ? s.startTime+':00' : (s.startTime||'00:00:00');
+  const ms = Date.parse(s.date+'T'+t);
+  return isNaN(ms) ? 0 : ms;
+}
+function _shiftEndTimestampMs(s){
+  if(!s || !s.date) return 0;
+  const endDate = _shiftEndDateISO(s);
+  const t = (s.endTime||'23:59').length===5 ? s.endTime+':00' : (s.endTime||'23:59:59');
+  const ms = Date.parse(endDate+'T'+t);
+  return isNaN(ms) ? 0 : ms;
+}
+function _shiftDurationMinutes(s){
+  const sMs = _shiftStartTimestampMs(s);
+  const eMs = _shiftEndTimestampMs(s);
+  if(!sMs || !eMs || eMs <= sMs) return 0;
+  return Math.round((eMs - sMs) / 60000);
+}
+// Compact range label · used in roster cells, modal hint, and any tight UI.
+//   same-day:  "08:00 → 16:00"
+//   overnight: "20:00 → 08:00 (+1d)"
+//   24h:       "08:00 → 08:00 (+1d · 24h)"
+// [Phase HR1c.2b] Stored times are 'HH:MM:SS' (saveShiftSchedule pads them) — slice to HH:MM for display.
+function _shiftRangeLabelCompact(s){
+  if(!s) return '';
+  const a = (s.startTime||'?').substring(0,5), b = (s.endTime||'?').substring(0,5);
+  if(_shiftIs24h(s)) return a+' → '+b+' (+1d · 24h)';
+  if(_shiftIsOvernight(s)) return a+' → '+b+' (+1d)';
+  return a+' → '+b;
+}
+// Full range label · used in shift cards + My Schedule rows where space allows.
+//   same-day:  "06/05 08:00 → 16:00"
+//   overnight: "06/05 20:00 → 07/05 08:00"
+//   24h:       "06/05 08:00 → 07/05 08:00 · 24h"
+function _shiftRangeLabelFull(s){
+  if(!s || !s.date) return _shiftRangeLabelCompact(s);
+  const fmt = function(iso){
+    try { const d = new Date(iso+'T00:00:00'); const dd = String(d.getDate()).padStart(2,'0'); const mm = String(d.getMonth()+1).padStart(2,'0'); return dd+'/'+mm; }
+    catch(e){ return iso; }
+  };
+  const startLbl = fmt(s.date);
+  // [Phase HR1c.2b] Slice stored 'HH:MM:SS' down to 'HH:MM' for display.
+  const a = (s.startTime||'?').substring(0,5), b = (s.endTime||'?').substring(0,5);
+  if(_shiftIs24h(s)){
+    const endLbl = fmt(_shiftEndDateISO(s));
+    return startLbl+' '+a+' → '+endLbl+' '+b+' · 24h';
+  }
+  if(_shiftIsOvernight(s)){
+    const endLbl = fmt(_shiftEndDateISO(s));
+    return startLbl+' '+a+' → '+endLbl+' '+b;
+  }
+  return startLbl+' '+a+' → '+b;
+}
+// Roster cell label · used by HR1c.4 Monthly Roster (placed here for forward reuse · no callers in HR1c.2b).
+//   morning:'M', evening:'E', night:'N', 24h:'🕐 24h', cancelled:'CANCELLED', missing:'OFF'
+function _shiftCellLabel(s){
+  if(!s) return 'OFF';
+  if(s.status === 'cancelled') return 'CANCELLED';
+  if(_shiftIs24h(s)) return '🕐 24h';
+  const map = {morning:'M', evening:'E', night:'N'};
+  return map[s.shiftType] || (s.shiftType ? s.shiftType.charAt(0).toUpperCase() : '?');
+}
+// Shared overnight hint builder · used by both Create Shift and Edit Shift modals (Q2).
+// Inputs are raw form values (the caller reads its own fields); returns an HTML-safe string.
+function _buildOvernightHint(dateISO, startTime, endTime, shiftType){
+  if(!startTime || !endTime){ return ''; }
+  const synth = {date:dateISO||'2000-01-01', startTime:startTime, endTime:endTime, shiftType:shiftType||''};
+  if(_shiftIs24h(synth)){
+    const endDateISO = _shiftEndDateISO(synth);
+    let endLbl = endDateISO;
+    try { const d = new Date(endDateISO+'T00:00:00'); endLbl = d.toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short'}); } catch(e){}
+    return '🕐 24-hour shift · ends '+endLbl+' at '+endTime+' (+1d)';
+  }
+  if(_shiftIsOvernight(synth)){
+    const endDateISO = _shiftEndDateISO(synth);
+    let endLbl = endDateISO;
+    try { const d = new Date(endDateISO+'T00:00:00'); endLbl = d.toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short'}); } catch(e){}
+    return '🌙 Overnight · ends '+endLbl+' at '+endTime+' (+1d)';
+  }
+  const mins = _shiftDurationMinutes(synth);
+  if(mins > 0){
+    const h = Math.floor(mins/60), m = mins%60;
+    return 'Same-day shift · '+h+'h '+(m<10?'0':'')+m+'m';
+  }
+  return '';
+}
+window._shiftIsOvernight       = _shiftIsOvernight;
+window._shiftIs24h             = _shiftIs24h;
+window._shiftEndDateISO        = _shiftEndDateISO;
+window._shiftDurationMinutes   = _shiftDurationMinutes;
+window._shiftRangeLabelCompact = _shiftRangeLabelCompact;
+window._shiftRangeLabelFull    = _shiftRangeLabelFull;
+window._shiftCellLabel         = _shiftCellLabel;
+window._buildOvernightHint     = _buildOvernightHint;
+
+// Find time-range conflicts: same user assigned to overlapping shifts that touch dateISO.
 // Returns array of conflict pairs [{shift1, shift2}, ...]. Pure read · no mutation.
+// [Phase HR1c.2b] Overnight-aware: pulls a 2-day window so a Night shift starting yesterday
+// can be overlap-checked against today's shifts. Overlap is computed on absolute timestamp
+// space (not naive HH:MM string compare) so 20:00 → 08:00 is correctly modelled as 12 hours.
 function findShiftConflicts(userId, dateISO){
   if(!userId || !dateISO) return [];
   const my = getShiftAssignments().filter(function(a){
     return a.userId===userId && a.status!=='removed';
   });
-  const shifts = getShiftSchedules().filter(function(s){ return s.date===dateISO; });
-  const myShiftsToday = my.map(function(a){
-    return shifts.find(function(x){ return x.id===a.shiftId; });
+  const yesterday = (typeof _addDaysISO==='function') ? _addDaysISO(dateISO,-1) : dateISO;
+  const tomorrow  = (typeof _addDaysISO==='function') ? _addDaysISO(dateISO, 1) : dateISO;
+  const inWindow = function(s){ return s && (s.date===yesterday || s.date===dateISO || s.date===tomorrow); };
+  const allShifts = getShiftSchedules().filter(inWindow);
+  const myShiftsInWindow = my.map(function(a){
+    return allShifts.find(function(x){ return x.id===a.shiftId; });
   }).filter(Boolean);
+  // Restrict to shifts whose absolute [start..end] window actually touches dateISO,
+  // so we don't flag a shift that started+ended yesterday vs. one starting today (no real overlap with today).
+  const dayStartMs = Date.parse(dateISO+'T00:00:00');
+  const dayEndMs   = Date.parse(dateISO+'T23:59:59');
+  const relevant = myShiftsInWindow.filter(function(s){
+    const sMs = (typeof _shiftStartTimestampMs==='function') ? _shiftStartTimestampMs(s) : 0;
+    const eMs = (typeof _shiftEndTimestampMs==='function')   ? _shiftEndTimestampMs(s)   : 0;
+    return sMs && eMs && sMs <= dayEndMs && eMs >= dayStartMs;
+  });
   const conflicts = [];
-  for(let i=0;i<myShiftsToday.length;i++){
-    for(let j=i+1;j<myShiftsToday.length;j++){
-      const a = myShiftsToday[i], b = myShiftsToday[j];
-      // Time-range overlap on same date (start_time / end_time as 'HH:MM:SS' strings sort lexicographically)
-      const aStart = a.startTime||'00:00:00', aEnd = a.endTime||'23:59:59';
-      const bStart = b.startTime||'00:00:00', bEnd = b.endTime||'23:59:59';
-      if(aStart < bEnd && bStart < aEnd){
+  for(let i=0;i<relevant.length;i++){
+    for(let j=i+1;j<relevant.length;j++){
+      const a = relevant[i], b = relevant[j];
+      const aS = (typeof _shiftStartTimestampMs==='function') ? _shiftStartTimestampMs(a) : 0;
+      const aE = (typeof _shiftEndTimestampMs==='function')   ? _shiftEndTimestampMs(a)   : 0;
+      const bS = (typeof _shiftStartTimestampMs==='function') ? _shiftStartTimestampMs(b) : 0;
+      const bE = (typeof _shiftEndTimestampMs==='function')   ? _shiftEndTimestampMs(b)   : 0;
+      if(aS && aE && bS && bE && aS < bE && bS < aE){
         conflicts.push({shift1:a, shift2:b});
       }
     }
@@ -5070,6 +5223,7 @@ function renderSchedulesPage(){
   <div id="schedList"></div>
   ${_schedRenderCreateModal()}
   ${_schedRenderAddStaffModal()}
+  ${/* [Phase HR1c.2b] Edit Shift modal · sibling of Create + Add Staff modals */ _schedRenderEditModal()}
   `;
 }
 
@@ -5086,13 +5240,19 @@ function renderShiftCard(s){
   const docFromUsers = (s.doctorUserId && (typeof getUsers==='function')) ? (getUsers().find(function(u){ return u.id===s.doctorUserId; })?.name) : '';
   const doctorLabel = docFromUsers || docName || s.doctorUserId || '<em style="color:#94a3b8">not set</em>';
   const canManage = (typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule') || (hasPerm('hr.shifts.schedule.ownBranch') && s.branch===CU.branch)));
+  // [Phase HR1c.2b] Use full date+time range label so overnight + 24h shifts are unambiguous.
+  const rangeLbl = (typeof _shiftRangeLabelFull==='function') ? _shiftRangeLabelFull(s) : ((s.startTime||'?')+'–'+(s.endTime||'?'));
+  // [Phase HR1c.2b] Edit button — only when caller can manage AND shift not cancelled.
+  const editBtn   = (canManage && !cancelled) ? '<button class="btn bs btn-sm" onclick="openEditShiftModal(\''+s.id+'\')" style="font-size:11px;margin-right:4px">✏️ Edit</button>' : '';
+  const cancelBtn = (canManage && !cancelled) ? '<button class="btn brd btn-sm" onclick="cancelShift(\''+s.id+'\')" style="font-size:11px">✕ Cancel Shift</button>' : '';
+  const actionGroup = (editBtn || cancelBtn) ? '<div style="display:flex;gap:4px;flex-wrap:wrap">'+editBtn+cancelBtn+'</div>' : '';
   return '<div class="card" style="margin-bottom:10px;padding:14px;'+(cancelled?'opacity:0.55;':'')+'">'+
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:8px">'+
       '<div>'+
-        '<div style="font-size:15px;font-weight:700">'+typeIcon+' '+(s.shiftType||'shift').charAt(0).toUpperCase()+(s.shiftType||'').slice(1)+' · '+(s.startTime||'?')+'–'+(s.endTime||'?')+'</div>'+
+        '<div style="font-size:15px;font-weight:700">'+typeIcon+' '+(s.shiftType||'shift').charAt(0).toUpperCase()+(s.shiftType||'').slice(1)+' · '+rangeLbl+'</div>'+
         '<div style="font-size:11px;color:var(--g500);margin-top:2px">'+s.id+' · '+statusBadge+'</div>'+
       '</div>'+
-      (canManage && !cancelled ? '<div><button class="btn brd btn-sm" onclick="cancelShift(\''+s.id+'\')" style="font-size:11px">✕ Cancel Shift</button></div>' : '')+
+      actionGroup+
     '</div>'+
     '<div style="margin-top:10px;font-size:13px"><strong>👨‍⚕️ Doctor:</strong> '+doctorLabel+'</div>'+
     renderShiftAssignmentsList(s.id, canManage && !cancelled)+
@@ -5124,10 +5284,11 @@ function renderShiftAssignmentsList(shiftId, canManage){
 //   - renderClinicDash (nurse · after stats5)
 //   - renderRolePlaceholderDash (doctor / lab / driver / accountant · top)
 //   - renderShifts (Attendance page · between Live Today and My Month · ignores month picker)
-// Reads HR1c.1 helpers via getMyUpcomingShifts (HR1c.3-extended to also include shifts where
-// schedule.doctorUserId === userId, since doctors don't get shift_assignments rows).
-// Read-only · cancelled shifts shown greyed-out (D3) · empty state shown when 0 (D2).
-// No conflict warnings (HR1c.4) · no swap/decline (HR1e).
+// Uses HR1c.1 helper getMyUpcomingShifts (HR1c.2b-extended for endDate filter + HR1c.3-extended
+// for doctorUserId branch so doctors see their own shifts even without a shift_assignments row).
+// Time/date label uses HR1c.2b _shiftRangeLabelFull so overnight (06/05 20:00 → 07/05 08:00) and
+// 24h (06/05 08:00 → 07/05 08:00 · 24h) shifts render unambiguously.
+// Read-only · cancelled shifts greyed-out (D3) · empty state when 0 (D2). No conflict warnings (HR1c.4).
 function renderMyShiftRow(s){
   const cancelled = s.status==='cancelled';
   const published = s.status==='published';
@@ -5137,15 +5298,14 @@ function renderMyShiftRow(s){
   const statusBadge = cancelled
     ? '<span class="bdg bred" style="font-size:10px">✕ cancelled</span>'
     : (published ? '<span class="bdg bg" style="font-size:10px">✅ published</span>' : '<span class="bdg ba" style="font-size:10px">🟡 planned</span>');
+  // Doctor name resolution (Staff catalog → Users → raw id)
   const docFromStaff = (s.doctorUserId && (typeof getStaff==='function')) ? (getStaff().find(function(st){ return st.id===s.doctorUserId; })?.name) : '';
   const docFromUsers = (s.doctorUserId && (typeof getUsers==='function')) ? (getUsers().find(function(u){ return u.id===s.doctorUserId; })?.name) : '';
   const doctorLabel = docFromUsers || docFromStaff || s.doctorUserId || '—';
   const branchName = (typeof getBr==='function') ? (getBr(s.branch).name||s.branch) : s.branch;
-  let dateLabel = s.date;
-  try {
-    const d = new Date(s.date+'T00:00:00');
-    dateLabel = d.toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short'});
-  } catch(e){}
+  // [Phase HR1c.3 + HR1c.2b] Use _shiftRangeLabelFull for unambiguous date+time label.
+  const rangeLbl = (typeof _shiftRangeLabelFull==='function') ? _shiftRangeLabelFull(s) : ((s.date||'')+' · '+(s.startTime||'?')+'–'+(s.endTime||'?'));
+  // Other staff count (excluding the current user)
   const allAssigns = (typeof getAssignmentsByShift==='function') ? getAssignmentsByShift(s.id, false) : [];
   const otherCount = allAssigns.filter(function(a){ return !CU || a.userId!==CU.id; }).length;
   const otherLabel = otherCount > 0 ? (' · with '+otherCount+' other '+(otherCount===1?'staff':'staff')) : '';
@@ -5154,7 +5314,7 @@ function renderMyShiftRow(s){
   const myRoleHint = (s.assignmentRole==='doctor') ? ' <span style="font-size:10px;color:var(--p);font-weight:600">· you (doctor)</span>' : '';
   return '<div class="card" style="margin-bottom:8px;padding:12px 14px;'+rowStyle+'">'+
     '<div style="display:flex;justify-content:space-between;align-items:flex-start;flex-wrap:wrap;gap:6px">'+
-      '<div style="font-size:14px;font-weight:600;'+titleStyle+'">'+dateLabel+' · '+typeIcon+' '+typeLabel+' · '+(s.startTime||'?')+'–'+(s.endTime||'?')+myRoleHint+'</div>'+
+      '<div style="font-size:14px;font-weight:600;'+titleStyle+'">'+typeIcon+' '+typeLabel+' · '+rangeLbl+myRoleHint+'</div>'+
       statusBadge+
     '</div>'+
     '<div style="margin-top:4px;font-size:12px;color:var(--g600)">'+
@@ -5211,23 +5371,25 @@ function _schedRenderCreateModal(){
           <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Branch</label>
             <select class="fsi" id="cs_branch" ${isOwnBranchOnly?'disabled':''}>${branchOpts}</select></div>
           <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Date</label>
-            <input class="fsi" id="cs_date" type="date" value="${today}"></div>
+            <input class="fsi" id="cs_date" type="date" value="${today}" oninput="_csUpdateOvernightHint()"></div>
         </div>
         <div style="margin-bottom:10px">
           <label style="font-size:11px;color:var(--g600);display:block;margin-bottom:4px">Shift Type</label>
           <div style="display:flex;gap:8px;flex-wrap:wrap">
-            <label><input type="radio" name="cs_type" value="morning" checked> 🌅 Morning</label>
-            <label><input type="radio" name="cs_type" value="evening"> 🌆 Evening</label>
-            <label><input type="radio" name="cs_type" value="night"> 🌙 Night</label>
-            <label><input type="radio" name="cs_type" value="24h"> 🕐 24h</label>
+            <label><input type="radio" name="cs_type" value="morning" checked onchange="_csUpdateOvernightHint()"> 🌅 Morning</label>
+            <label><input type="radio" name="cs_type" value="evening" onchange="_csUpdateOvernightHint()"> 🌆 Evening</label>
+            <label><input type="radio" name="cs_type" value="night" onchange="_csUpdateOvernightHint()"> 🌙 Night</label>
+            <label><input type="radio" name="cs_type" value="24h" onchange="_csUpdateOvernightHint()"> 🕐 24h</label>
           </div>
         </div>
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:6px">
           <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Start Time</label>
-            <input class="fsi" id="cs_start" type="time" value="08:00"></div>
+            <input class="fsi" id="cs_start" type="time" value="08:00" oninput="_csUpdateOvernightHint()"></div>
           <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">End Time</label>
-            <input class="fsi" id="cs_end" type="time" value="16:00"></div>
+            <input class="fsi" id="cs_end" type="time" value="16:00" oninput="_csUpdateOvernightHint()"></div>
         </div>
+        <!-- [Phase HR1c.2b] Live overnight / 24h indicator · driven by _buildOvernightHint -->
+        <div id="cs_overnight_hint" style="font-size:11px;color:var(--g600);margin-bottom:10px;min-height:16px"></div>
         <div style="margin-bottom:10px">
           <label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Doctor (optional)</label>
           <select class="fsi" id="cs_doctor" style="width:100%">${docOpts}</select>
@@ -5263,6 +5425,203 @@ function _schedRenderAddStaffModal(){
     '</div></div>';
 }
 
+// ════════════════════════════════════════════
+// [Phase HR1c.2b] Edit Shift modal HTML
+// ════════════════════════════════════════════
+// Tier-1 edit (Q1): editable = start_time / end_time / doctor_user_id / notes.
+// Locked = branch / date / shift_type (they're part of the stable id `SS-{branch}-{YYYYMMDD}-{type}`).
+// Same .modal/.mhdr/.mbody classes as Create modal (HR1c.2a fix).
+function _schedRenderEditModal(){
+  // Doctor options use the same Staff catalog → HMC_DOCTORS fallback as Create modal.
+  const staffDocs = (typeof getStaff==='function')?getStaff().filter(function(s){return s.role==='Doctor';}):[];
+  const docNames = staffDocs.length ? staffDocs.map(function(d){return {id:d.id,name:d.name};}) : (typeof HMC_DOCTORS!=='undefined'?HMC_DOCTORS.map(function(n){return {id:n,name:n};}):[]);
+  const docOpts = '<option value="">— None —</option>' + docNames.map(function(d){ return '<option value="'+d.id+'">'+d.name+'</option>'; }).join('');
+  return `
+  <div class="mbd" id="editShiftModal">
+    <div class="modal" style="max-width:520px;width:92vw;max-height:90vh;overflow:auto">
+      <div class="mhdr"><div class="mt">✏️ Edit Shift</div><button class="mc" onclick="closeEditShiftModal()">×</button></div>
+      <div class="mbody" style="padding:16px">
+        <!-- Locked context (read-only display) -->
+        <div style="background:var(--g50);padding:8px 10px;border-radius:6px;margin-bottom:12px;font-size:12px;color:var(--g600)">
+          <div><strong>Branch:</strong> <span id="es_branch_lbl">—</span></div>
+          <div><strong>Date:</strong>   <span id="es_date_lbl">—</span></div>
+          <div><strong>Type:</strong>   <span id="es_type_lbl">—</span></div>
+          <div style="font-size:10px;color:var(--g500);margin-top:4px">To change branch, date, or type — cancel this shift and create a new one.</div>
+        </div>
+        <!-- Editable fields -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:6px">
+          <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Start Time</label>
+            <input class="fsi" id="es_start" type="time" oninput="_esUpdateOvernightHint()"></div>
+          <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">End Time</label>
+            <input class="fsi" id="es_end" type="time" oninput="_esUpdateOvernightHint()"></div>
+        </div>
+        <!-- [Phase HR1c.2b] Live overnight / 24h indicator (Edit Shift) -->
+        <div id="es_overnight_hint" style="font-size:11px;color:var(--g600);margin-bottom:10px;min-height:16px"></div>
+        <div style="margin-bottom:10px">
+          <label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Doctor (optional · select '— None —' to remove)</label>
+          <select class="fsi" id="es_doctor" style="width:100%">${docOpts}</select>
+        </div>
+        <div style="margin-bottom:10px">
+          <label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Notes (optional)</label>
+          <input class="fsi" id="es_notes" type="text" placeholder="Optional shift notes..." style="width:100%">
+        </div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+          <button class="btn bs" onclick="closeEditShiftModal()">Cancel</button>
+          <button class="btn bp" onclick="saveShiftEdit(window._editingShiftId)">💾 Save Changes</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// Reads Edit Shift form values and updates the live overnight/24h hint line.
+function _esUpdateOvernightHint(){
+  try {
+    // Date and shift type are locked · we read them from the data attribute we stash on open.
+    const m = document.getElementById('editShiftModal');
+    const dateISO = (m && m.dataset && m.dataset.shiftDate) ? m.dataset.shiftDate : '';
+    const shiftType = (m && m.dataset && m.dataset.shiftType) ? m.dataset.shiftType : '';
+    const startTime = (document.getElementById('es_start')?.value||'').trim();
+    const endTime = (document.getElementById('es_end')?.value||'').trim();
+    const hintEl = document.getElementById('es_overnight_hint');
+    if(!hintEl) return;
+    if(typeof _buildOvernightHint==='function'){
+      hintEl.textContent = _buildOvernightHint(dateISO, startTime, endTime, shiftType);
+    }
+  } catch(e){ /* silent */ }
+}
+window._esUpdateOvernightHint = _esUpdateOvernightHint;
+
+// Populate Edit modal from existing shift · permission re-check · stash _editingShiftId.
+function openEditShiftModal(shiftId){
+  if(!shiftId){ if(typeof toast==='function') toast('Shift id required','err'); return; }
+  const m = document.getElementById('editShiftModal');
+  if(!m){ if(typeof toast==='function') toast('Open Schedules page first','warn'); return; }
+  const all = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
+  const shift = all.find(function(s){ return s.id===shiftId; });
+  if(!shift){ if(typeof toast==='function') toast('Shift not found','err'); return; }
+  // Permission gate (same as Create — admin/hr_manager any branch · head_nurse own branch)
+  const canManage = (typeof hasPerm==='function' && (
+    hasPerm('hr.shifts.schedule') ||
+    (hasPerm('hr.shifts.schedule.ownBranch') && shift.branch===CU.branch)
+  ));
+  if(!canManage){ if(typeof toast==='function') toast('You cannot edit this shift','err'); return; }
+  if(shift.status==='cancelled'){ if(typeof toast==='function') toast('Cancelled shifts cannot be edited · use Create Shift to add a new one','warn'); return; }
+  // Populate locked labels
+  const branchName = (typeof getBr==='function') ? (getBr(shift.branch).name||shift.branch) : shift.branch;
+  const lblB = document.getElementById('es_branch_lbl'); if(lblB) lblB.textContent = branchName+' ('+shift.branch+')';
+  const lblD = document.getElementById('es_date_lbl');   if(lblD) lblD.textContent = shift.date;
+  const lblT = document.getElementById('es_type_lbl');   if(lblT) lblT.textContent = (shift.shiftType||'shift');
+  // Populate editable fields (HH:MM only — input[type=time] strips trailing :ss)
+  const startEl = document.getElementById('es_start');
+  const endEl   = document.getElementById('es_end');
+  if(startEl) startEl.value = (shift.startTime||'').substring(0,5);
+  if(endEl)   endEl.value   = (shift.endTime||'').substring(0,5);
+  const docEl = document.getElementById('es_doctor');
+  if(docEl) docEl.value = shift.doctorUserId || '';
+  const notesEl = document.getElementById('es_notes');
+  if(notesEl) notesEl.value = shift.notes || '';
+  // Stash locked context for the hint helper + save handler
+  m.dataset.shiftDate = shift.date;
+  m.dataset.shiftType = shift.shiftType || '';
+  window._editingShiftId = shiftId;
+  // Initial hint render
+  if(typeof _esUpdateOvernightHint==='function') _esUpdateOvernightHint();
+  m.classList.add('open');
+}
+function closeEditShiftModal(){
+  const m = document.getElementById('editShiftModal');
+  if(m){ m.classList.remove('open'); delete m.dataset.shiftDate; delete m.dataset.shiftType; }
+  window._editingShiftId = null;
+}
+window.openEditShiftModal = openEditShiftModal;
+window.closeEditShiftModal = closeEditShiftModal;
+
+// Save Edit · UPSERT pattern (same id) · doctor-assignment hygiene · re-check conflicts post-save (non-blocking).
+async function saveShiftEdit(shiftId){
+  if(!shiftId){ if(typeof toast==='function') toast('Shift id required','err'); return; }
+  const all = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
+  const idx = all.findIndex(function(s){ return s.id===shiftId; });
+  if(idx<0){ if(typeof toast==='function') toast('Shift not found','err'); return; }
+  const prior = Object.assign({}, all[idx]);
+  if(prior.status==='cancelled'){ if(typeof toast==='function') toast('Cannot edit cancelled shift','err'); return; }
+  // Permission re-check (defense in depth)
+  const canManage = (typeof hasPerm==='function' && (
+    hasPerm('hr.shifts.schedule') ||
+    (hasPerm('hr.shifts.schedule.ownBranch') && prior.branch===CU.branch)
+  ));
+  if(!canManage){ if(typeof toast==='function') toast('Permission denied','err'); return; }
+  // Read editable fields
+  const startTime = (document.getElementById('es_start')?.value||'').trim();
+  const endTime   = (document.getElementById('es_end')?.value||'').trim();
+  const newDoctor = (document.getElementById('es_doctor')?.value||'').trim();
+  const newNotes  = (document.getElementById('es_notes')?.value||'').trim().substring(0,400);
+  if(!startTime || !endTime){ if(typeof toast==='function') toast('Start + end times required','err'); return; }
+  // Build updated row · keep id/branch/date/shiftType/status/createdBy/createdAt
+  const nowISO = new Date().toISOString();
+  const updated = Object.assign({}, prior, {
+    startTime: startTime+(startTime.length===5?':00':''),
+    endTime:   endTime+(endTime.length===5?':00':''),
+    doctorUserId: newDoctor || null,
+    notes: newNotes || null,
+    updatedAt: nowISO
+  });
+  all[idx] = updated;
+  if(typeof saveShiftSchedules==='function') saveShiftSchedules(all);
+  await _pushShiftSchedule(updated);
+  // Doctor-assignment hygiene
+  const oldDoctor = prior.doctorUserId || '';
+  if(oldDoctor && oldDoctor !== newDoctor){
+    // Soft-remove the old doctor's assignment row (if any active row exists)
+    const allAssigns = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
+    const aIdx = allAssigns.findIndex(function(a){ return a.shiftId===shiftId && a.userId===oldDoctor && a.role==='doctor' && a.status!=='removed'; });
+    if(aIdx>=0){
+      allAssigns[aIdx].status = 'removed';
+      if(typeof saveShiftAssignments==='function') saveShiftAssignments(allAssigns);
+      await _pushShiftAssignment(allAssigns[aIdx]);
+    }
+  }
+  if(newDoctor && newDoctor !== oldDoctor){
+    let docName = '';
+    if(typeof getStaff==='function'){
+      const sd = getStaff().find(function(s){ return s.id===newDoctor; });
+      if(sd) docName = sd.name;
+    }
+    if(!docName && typeof getUsers==='function'){
+      const ud = getUsers().find(function(u){ return u.id===newDoctor; });
+      if(ud) docName = ud.name||ud.username||newDoctor;
+    }
+    if(!docName) docName = newDoctor;
+    if(typeof addShiftAssignment==='function'){
+      await addShiftAssignment(shiftId, newDoctor, 'doctor', docName, /*silent=*/true);
+    }
+  }
+  // Audit
+  const detail = prior.branch+'|'+prior.date+'|'+(prior.shiftType||'')+'|'+
+    (prior.startTime||'')+'-'+(prior.endTime||'')+'→'+(updated.startTime||'')+'-'+(updated.endTime||'')+
+    (oldDoctor!==newDoctor ? '|docChanged' : '');
+  if(typeof logAccess==='function') logAccess('hr.shift.edited', shiftId, detail);
+  // Q1 — re-run conflict check for each currently-assigned user · non-blocking warning
+  try {
+    const activeAssigns = (typeof getShiftAssignments==='function'?getShiftAssignments():[])
+      .filter(function(a){ return a.shiftId===shiftId && a.status!=='removed'; });
+    const flagged = [];
+    for(const a of activeAssigns){
+      const conflicts = (typeof findShiftConflicts==='function') ? findShiftConflicts(a.userId, prior.date) : [];
+      if(conflicts && conflicts.length){
+        flagged.push((a.staffName||a.userId)+' ×'+conflicts.length);
+      }
+    }
+    if(flagged.length && typeof toast==='function'){
+      toast('⚠ Conflicts after edit: '+flagged.join(' · '),'warn');
+    }
+  } catch(e){ /* silent — conflict warning is best-effort */ }
+  if(typeof toast==='function') toast('💾 Shift updated','ok');
+  closeEditShiftModal();
+  if(typeof _schedFilterChange==='function') _schedFilterChange();
+}
+window.saveShiftEdit = saveShiftEdit;
+
 function openCreateShiftModal(branchOverride, dateOverride){
   const m = document.getElementById('createShiftModal');
   if(!m){ if(typeof toast==='function') toast('Open Schedules page first','warn'); return; }
@@ -5280,6 +5639,23 @@ function closeCreateShiftModal(){
 }
 window.openCreateShiftModal = openCreateShiftModal;
 window.closeCreateShiftModal = closeCreateShiftModal;
+
+// [Phase HR1c.2b] Reads Create Shift form values and updates the live overnight/24h hint line.
+function _csUpdateOvernightHint(){
+  try {
+    const dateISO = (document.getElementById('cs_date')?.value||'').trim();
+    const startTime = (document.getElementById('cs_start')?.value||'').trim();
+    const endTime = (document.getElementById('cs_end')?.value||'').trim();
+    const typeEl = document.querySelector('input[name="cs_type"]:checked');
+    const shiftType = typeEl ? typeEl.value : '';
+    const hintEl = document.getElementById('cs_overnight_hint');
+    if(!hintEl) return;
+    if(typeof _buildOvernightHint==='function'){
+      hintEl.textContent = _buildOvernightHint(dateISO, startTime, endTime, shiftType);
+    }
+  } catch(e){ /* silent — hint is optional UX */ }
+}
+window._csUpdateOvernightHint = _csUpdateOvernightHint;
 
 async function saveShiftSchedule(){
   const branch = (document.getElementById('cs_branch')?.value||'').trim();
