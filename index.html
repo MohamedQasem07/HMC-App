@@ -3598,37 +3598,56 @@ function _rosterDayColumns(monthYM){
   return out;
 }
 
-// Derives the staff rows visible in the roster for (branch, monthYM).
-// - Nurses: all active users with role='nurse' filtered to the branch (or branch='all')
-// - Doctors: only those with at least one shift in the visible month for the branch
-//   (D4 decision: avoid empty doctor rows · doctor name resolved via Staff catalog → Users)
-// Returns: [{ id, name, role, kind:'nurse'|'doctor' }, ...] · nurses first then doctors,
-// each group alphabetized by name.
+// [Phase HR1c.4a.1] Derives the NURSING-ONLY staff rows visible in the Monthly Roster.
+// Business rule: Monthly Roster = nursing roster only. Doctors are variable-daily duty
+// staff and surface inside shift cards / cell popovers / Edit Shift modal — NOT as roster rows.
+// Returns the union of:
+//   (A) active nurses whose home branch matches the selected branch (or branch='all')
+//   (B) nurses assigned to any shift in (branch, monthYM) — even if their home branch differs
+// Deduplicated by user.id and sorted alphabetically by name.
+// Returns: [{ id, name, role:'nurse', kind:'nurse' }, ...]
 function _rosterStaffRows(branch, monthYM){
   if(!branch || !monthYM) return [];
   const usersAll = (typeof getUsers==='function') ? getUsers() : [];
-  const staffAll = (typeof getStaff==='function') ? getStaff() : [];
-  const nurses = usersAll
+  // (A) Active nurses with matching home branch
+  const homeBranchNurses = usersAll
     .filter(function(u){ return u && u.role==='nurse' && u.active!==false; })
     .filter(function(u){ return !branch || branch==='all' || !u.branch || u.branch===branch || u.branch==='all'; })
-    .map(function(u){ return { id:u.id, name:u.name||u.username||u.id, role:'nurse', kind:'nurse' }; })
-    .sort(function(a,b){ return (a.name||'').localeCompare(b.name||''); });
-  // Doctors: derive from shifts in month
+    .map(function(u){ return { id:u.id, name:u.name||u.username||u.id, role:'nurse', kind:'nurse' }; });
+  // (B) Nurses assigned to any shift in (branch, monthYM) · cross-branch coverage
   const shifts = (typeof getShiftSchedules==='function') ? getShiftSchedules() : [];
-  const docIds = new Set();
+  const shiftIdsInScope = new Set();
   shifts.forEach(function(s){
-    if(!s || !s.doctorUserId) return;
+    if(!s || !s.id || !s.date) return;
     if(s.branch !== branch && branch !== 'all') return;
-    if(!s.date || !s.date.startsWith(monthYM)) return;
-    docIds.add(s.doctorUserId);
+    if(!s.date.startsWith(monthYM)) return;
+    shiftIdsInScope.add(s.id);
   });
-  const doctors = Array.from(docIds).map(function(did){
-    const fromStaff = staffAll.find(function(st){ return st.id===did; });
-    const fromUsers = usersAll.find(function(u){ return u.id===did; });
-    const name = (fromUsers && (fromUsers.name||fromUsers.username)) || (fromStaff && fromStaff.name) || did;
-    return { id:did, name:name, role:'doctor', kind:'doctor' };
-  }).sort(function(a,b){ return (a.name||'').localeCompare(b.name||''); });
-  return nurses.concat(doctors);
+  const allAssigns = (typeof getShiftAssignments==='function') ? getShiftAssignments() : [];
+  const assignedUserIds = new Set();
+  allAssigns.forEach(function(a){
+    if(!a || !a.userId) return;
+    if(a.status === 'removed') return;
+    if(!shiftIdsInScope.has(a.shiftId)) return;
+    assignedUserIds.add(a.userId);
+  });
+  const assignedNurses = Array.from(assignedUserIds).map(function(uid){
+    const u = usersAll.find(function(x){ return x && x.id===uid; });
+    if(!u) return null;
+    if(u.role !== 'nurse') return null;       // safety: only nurses (excludes doctors / head_nurse / etc.)
+    if(u.active === false) return null;        // safety: skip disabled accounts
+    return { id:u.id, name:u.name||u.username||u.id, role:'nurse', kind:'nurse' };
+  }).filter(Boolean);
+  // (C) Union by user.id · dedupe
+  const seen = new Set();
+  const merged = [];
+  homeBranchNurses.concat(assignedNurses).forEach(function(n){
+    if(!n || seen.has(n.id)) return;
+    seen.add(n.id);
+    merged.push(n);
+  });
+  // (D) Sort alphabetically by name
+  return merged.sort(function(a,b){ return (a.name||'').localeCompare(b.name||''); });
 }
 
 // Returns 0..N shift objects active for (staffId, dateISO) within branch.
