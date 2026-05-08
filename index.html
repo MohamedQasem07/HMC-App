@@ -5497,13 +5497,25 @@ function _findActiveCoverageShiftsFor(userId, dateISO, excludeShiftId){
 //   - Plan Month pre-batch confirm (F7) · Cell Quick-Edit confirm (F6) · Apply Pattern post-batch toast (F8)
 // A consecutive-night roster (Night May 1 + Night May 2 + Night May 3) MUST NOT count May 1's bleed
 // as a same-date conflict on May 2. Each night belongs to its own start-date cell.
-function _findActiveSameStartDateShiftsFor(userId, dateISO, excludeShiftId){
-  if(!userId || !dateISO) return [];
+function _findActiveSameStartDateShiftsFor(userIdOrIdentity, dateISO, excludeShiftId){
+  if(!userIdOrIdentity || !dateISO) return [];
+  // [Phase HR1c.5.5.2a-hotfix] Polymorphic input · string=legacy userId · object={staffId,userId} dual-key.
+  let staffId = null, userId = null;
+  if(typeof userIdOrIdentity === 'string'){
+    userId = userIdOrIdentity;
+  } else {
+    staffId = userIdOrIdentity.staffId || null;
+    userId = userIdOrIdentity.userId || null;
+  }
+  if(!staffId && !userId) return [];
   const allShifts = _dedupeById((typeof getShiftSchedules==='function')?getShiftSchedules():[]);
   const allAssigns = _dedupeById((typeof getShiftAssignments==='function')?getShiftAssignments():[]);
   const myShiftIds = new Set(
     allAssigns
-      .filter(function(a){ return a && a.userId===userId && a.status!=='removed' && a.role==='nurse'; })
+      .filter(function(a){
+        if(!a || a.status==='removed' || a.role!=='nurse') return false;
+        return (staffId && a.staffId===staffId) || (userId && a.userId===userId);
+      })
       .map(function(a){ return a.shiftId; })
   );
   return allShifts.filter(function(s){
@@ -6929,10 +6941,14 @@ function _schedRenderPlanMonthModal(){
 function openPlanMonthModal(nurseId, preselectedDay){
   const m = document.getElementById('planMonthModal');
   if(!m){ if(typeof toast==='function') toast('Open Schedules page first','warn'); return; }
-  const usersAll = (typeof getUsers==='function')?getUsers():[];
-  const u = usersAll.find(function(x){ return x && x.id===nurseId; });
-  if(!u){ if(typeof toast==='function') toast('Nurse not found','err'); return; }
-  if(u.role !== 'nurse'){ if(typeof toast==='function') toast('Plan Month is for nurses only · doctors via Edit Shift','warn'); return; }
+  // [Phase HR1c.5.5.2a-hotfix] Polymorphic nurse resolve via getActiveNurses() · accepts staffId or userId.
+  // Helper guarantees nurse-only output · drops the explicit u.role!=='nurse' branch.
+  const allNurses = (typeof getActiveNurses==='function') ? getActiveNurses() : [];
+  const n = allNurses.find(function(x){
+    if(!x) return false;
+    return (x.staffId && x.staffId===nurseId) || (x.userId && x.userId===nurseId);
+  });
+  if(!n){ if(typeof toast==='function') toast('Nurse not found','err'); return; }
   // Permission gate
   const hasAll = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
   const ownBranchOnly = (typeof hasPerm==='function' && !hasAll && hasPerm('hr.shifts.schedule.ownBranch') && CU && CU.branch && CU.branch!=='all') ? CU.branch : null;
@@ -6944,15 +6960,19 @@ function openPlanMonthModal(nurseId, preselectedDay){
   const monthYM = (monthEl && monthEl.value) ? monthEl.value : defaultMonth;
   let monthLbl = monthYM;
   try { monthLbl = new Date(monthYM+'-01T00:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'}); } catch(e){}
-  // Header labels
+  // [Phase HR1c.5.5.2a-hotfix] Header labels use n.name + n.branch from helper output (not user record).
+  const nurseName = n.name || nurseId;
   const lblNurse = document.getElementById('pm_nurse_lbl');
-  if(lblNurse) lblNurse.textContent = (u.name||u.username||u.id) + (u.branch ? ' · home: '+(getBr(u.branch).name||u.branch) : '');
+  if(lblNurse) lblNurse.textContent = nurseName + (n.branch ? ' · home: '+(getBr(n.branch).name||n.branch) : '');
   const lblMonth = document.getElementById('pm_month_lbl');
   if(lblMonth) lblMonth.textContent = monthLbl;
   const titleEl = document.getElementById('pm_title');
-  if(titleEl) titleEl.textContent = '🗓️ Plan Month — ' + (u.name||u.username||u.id);
-  // Stash state
+  if(titleEl) titleEl.textContent = '🗓️ Plan Month — ' + nurseName;
+  // [Phase HR1c.5.5.2a-hotfix] Stash dual-key + nurseName · applyPlanMonthExecute reads dataset.
   m.dataset.nurseId = nurseId;
+  m.dataset.staffId = n.staffId || '';
+  m.dataset.userId = n.userId || '';
+  m.dataset.nurseName = nurseName;
   m.dataset.monthYM = monthYM;
   m.dataset.selected = JSON.stringify([]);
   // Branch dropdown · default to nurse's home branch if allowed
@@ -6964,7 +6984,8 @@ function openPlanMonthModal(nurseId, preselectedDay){
       branchEl.disabled = true;
     } else {
       // admin/hr_manager: try default to nurse home; else first option
-      const homeId = u.branch && u.branch!=='all' ? u.branch : '';
+      // [Phase HR1c.5.5.2a-hotfix] Use n.branch from getActiveNurses() output instead of u.branch.
+      const homeId = n.branch && n.branch!=='all' ? n.branch : '';
       if(homeId){ const opt = branchEl.querySelector('option[value="'+homeId+'"]'); if(opt) branchEl.value = homeId; }
       branchEl.disabled = false;
     }
@@ -7138,15 +7159,21 @@ async function applyPlanMonthExecute(){
   const nurseId = m.dataset.nurseId;
   const monthYM = m.dataset.monthYM;
   if(!nurseId || !monthYM){ if(typeof toast==='function') toast('No nurse / month context','err'); return; }
+  // [Phase HR1c.5.5.2a-hotfix] Read dual-key + nurseName from dataset (set by openPlanMonthModal).
+  const staffId = m.dataset.staffId || null;
+  const userId = m.dataset.userId || null;
   let sel = [];
   try { sel = JSON.parse(m.dataset.selected||'[]'); } catch(e){ sel = []; }
   if(!sel.length){ if(typeof toast==='function') toast('Select at least 1 day','warn'); return; }
   const action = (document.querySelector('input[name="pm_action"]:checked')||{}).value || 'assign';
-  // Resolve nurse + permission
-  const usersAll = (typeof getUsers==='function')?getUsers():[];
-  const u = usersAll.find(function(x){ return x && x.id===nurseId; });
-  if(!u || u.role !== 'nurse' || u.active === false){ if(typeof toast==='function') toast('Invalid nurse','err'); return; }
-  const nurseName = u.name||u.username||u.id;
+  // [Phase HR1c.5.5.2a-hotfix] Resolve + validate nurse via getActiveNurses() polymorphic match.
+  const allNurses = (typeof getActiveNurses==='function') ? getActiveNurses() : [];
+  const n = allNurses.find(function(x){
+    if(!x) return false;
+    return (x.staffId && x.staffId===nurseId) || (x.userId && x.userId===nurseId);
+  });
+  if(!n || n.active === false){ if(typeof toast==='function') toast('Invalid nurse','err'); return; }
+  const nurseName = m.dataset.nurseName || n.name || nurseId;
   const hasAll = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
   const ownBranchOnly = (typeof hasPerm==='function' && !hasAll && hasPerm('hr.shifts.schedule.ownBranch') && CU && CU.branch && CU.branch!=='all') ? CU.branch : null;
   if(!hasAll && !ownBranchOnly){ if(typeof toast==='function') toast('Permission denied','err'); return; }
@@ -7177,7 +7204,8 @@ async function applyPlanMonthExecute(){
       const conflictDays = [];
       for(const day of sel){
         const expectedSid = (typeof _schedShiftId==='function') ? _schedShiftId(branch, day, shiftType) : null;
-        const others = _findActiveSameStartDateShiftsFor(nurseId, day, expectedSid);
+        // [Phase HR1c.5.5.2a-hotfix] Pass dual-key identity object · helper matches by staffId OR userId.
+        const others = _findActiveSameStartDateShiftsFor({staffId:staffId, userId:userId}, day, expectedSid);
         if(others.length) conflictDays.push({ day: day, count: others.length });
       }
       if(conflictDays.length){
@@ -7218,16 +7246,21 @@ async function applyPlanMonthExecute(){
       if(!shiftId) continue;
       // Skip if already assigned (idempotent)
       const allAssignsCur = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
-      const already = allAssignsCur.find(function(a){ return a && a.shiftId===shiftId && a.userId===nurseId && a.status!=='removed'; });
+      // [Phase HR1c.5.5.2a-hotfix] Idempotency match by staffId OR userId.
+      const already = allAssignsCur.find(function(a){
+        if(!a || a.shiftId!==shiftId || a.status==='removed') return false;
+        return (staffId && a.staffId===staffId) || (userId && a.userId===userId);
+      });
       if(!already){
         if(typeof addShiftAssignment==='function'){
-          const ok = await addShiftAssignment(shiftId, nurseId, 'nurse', nurseName, /*silent=*/true);
+          // [Phase HR1c.5.5.2a-hotfix] Pass dual-key identity object · always-both-keys write contract.
+          const ok = await addShiftAssignment(shiftId, {staffId:staffId, userId:userId, name:nurseName}, 'nurse', nurseName, /*silent=*/true);
           if(ok) assignedCount++;
         }
       } else {
         assignedCount++;
       }
-      if(typeof logAccess==='function') logAccess('hr.shift.plan_month_assigned', shiftId, branch+'|'+day+'|'+shiftType+'|'+nurseId);
+      if(typeof logAccess==='function') logAccess('hr.shift.plan_month_assigned', shiftId, branch+'|'+day+'|'+shiftType+'|'+(staffId||'')+'|'+(userId||''));
     }
     // Mark skipped days visually
     if(skippedDays.length){
@@ -7255,15 +7288,18 @@ async function applyPlanMonthExecute(){
         if(ownBranchOnly && s.branch !== ownBranchOnly) return;
         if(s.date === day) shiftIdsForDay.add(s.id);
       });
+      // [Phase HR1c.5.5.2a-hotfix] OFF filter matches by staffId OR userId · catches dual-key rows.
       const targets = allAssignsCur.filter(function(a){
-        return a && a.userId===nurseId && a.status!=='removed' && a.role==='nurse' && shiftIdsForDay.has(a.shiftId);
+        if(!a || a.status==='removed' || a.role!=='nurse') return false;
+        if(!shiftIdsForDay.has(a.shiftId)) return false;
+        return (staffId && a.staffId===staffId) || (userId && a.userId===userId);
       });
       for(const a of targets){ a.status='removed'; }
       if(targets.length){
         if(typeof saveShiftAssignments==='function') saveShiftAssignments(allAssignsCur);
         for(const a of targets){
           if(typeof _pushShiftAssignment==='function') await _pushShiftAssignment(a);
-          if(typeof logAccess==='function') logAccess('hr.shift.plan_month_off', a.id, day+'|'+nurseId);
+          if(typeof logAccess==='function') logAccess('hr.shift.plan_month_off', a.id, day+'|'+(staffId||'')+'|'+(userId||''));
           offRemovedCount++;
         }
       }
@@ -8129,8 +8165,25 @@ async function saveShiftSchedule(){
 }
 window.saveShiftSchedule = saveShiftSchedule;
 
-async function addShiftAssignment(shiftId, userId, role, staffName, silent){
-  if(!shiftId || !userId || !role) return false;
+async function addShiftAssignment(shiftId, userIdOrIdentity, role, staffName, silent){
+  if(!shiftId || !userIdOrIdentity || !role) return false;
+  // [Phase HR1c.5.5.2a-hotfix] Polymorphic identity · string=legacy userId · object={staffId,userId,name}.
+  let staffId = null, userId = null, isLegacyString = false;
+  if(typeof userIdOrIdentity === 'string'){
+    isLegacyString = true;
+    userId = userIdOrIdentity;
+    // Legacy path · resolve staffId from users.staff_id linkage (preserves HR1c.5.4 dual-write).
+    staffId = (typeof _resolveStaffIdForUser==='function') ? _resolveStaffIdForUser(userId) : null;
+  } else {
+    staffId = userIdOrIdentity.staffId || null;
+    userId = userIdOrIdentity.userId || null;
+    if(!staffName && userIdOrIdentity.name) staffName = userIdOrIdentity.name;
+  }
+  if(!staffId && !userId) return false;
+  // [Phase HR1c.5.5.2a-hotfix] Stable-id derivation:
+  //   · legacy string callers continue to use userId (back-compat preserves existing row ids in Supabase)
+  //   · new dual-key callers use staffId||userId so staff-only nurses get a unique stable namespace
+  const stableKey = isLegacyString ? userId : (staffId || userId);
   // Find shift for conflict check
   const shifts = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
   const shift = shifts.find(function(s){ return s.id===shiftId; });
@@ -8138,15 +8191,21 @@ async function addShiftAssignment(shiftId, userId, role, staffName, silent){
   if(shift && typeof findShiftConflicts==='function'){
     // Temporarily simulate this assignment to get conflicts
     const all = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
-    const tempId = _schedAssignmentId(shiftId, userId);
-    const exists = all.find(function(a){ return a.shiftId===shiftId && a.userId===userId && a.status!=='removed'; });
+    const tempId = _schedAssignmentId(shiftId, stableKey);
+    // [Phase HR1c.5.5.2a-hotfix] Idempotency match by staffId OR userId.
+    const exists = all.find(function(a){
+      if(!a || a.shiftId!==shiftId || a.status==='removed') return false;
+      return (staffId && a.staffId===staffId) || (userId && a.userId===userId);
+    });
     if(!exists){
-      all.push({id:tempId, shiftId:shiftId, userId:userId, role:role, status:'assigned'});
+      all.push({id:tempId, shiftId:shiftId, userId:userId, staffId:staffId, role:role, status:'assigned'});
       if(typeof saveShiftAssignments==='function') saveShiftAssignments(all);
-      const conflicts = findShiftConflicts(userId, shift.date);
+      // [Phase HR1c.5.5.2a-hotfix · accepted known limit] findShiftConflicts is userId-only · staff-only nurses get
+      // false-negative warning here. Non-blocking; a later phase can extend findShiftConflicts to dual-key.
+      const conflicts = userId ? findShiftConflicts(userId, shift.date) : [];
       if(conflicts.length && !silent){
         const otherShift = conflicts[0].shift1.id===shiftId ? conflicts[0].shift2 : conflicts[0].shift1;
-        const proceed = confirm('⚠ '+(staffName||userId)+' is already assigned to '+(getBr(otherShift.branch).name||otherShift.branch)+' '+(otherShift.startTime||'?')+'–'+(otherShift.endTime||'?')+' on '+otherShift.date+'.\n\nOverlap detected. Continue anyway?');
+        const proceed = confirm('⚠ '+(staffName||stableKey)+' is already assigned to '+(getBr(otherShift.branch).name||otherShift.branch)+' '+(otherShift.startTime||'?')+'–'+(otherShift.endTime||'?')+' on '+otherShift.date+'.\n\nOverlap detected. Continue anyway?');
         if(!proceed){
           // Rollback temp insert
           all.pop();
@@ -8162,7 +8221,11 @@ async function addShiftAssignment(shiftId, userId, role, staffName, silent){
   }
   // Idempotent check: existing row?
   const all = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
-  const existingIdx = all.findIndex(function(a){ return a.shiftId===shiftId && a.userId===userId; });
+  // [Phase HR1c.5.5.2a-hotfix] Idempotency match by staffId OR userId · catches dual-key rows.
+  const existingIdx = all.findIndex(function(a){
+    if(!a || a.shiftId!==shiftId) return false;
+    return (staffId && a.staffId===staffId) || (userId && a.userId===userId);
+  });
   const nowISO = new Date().toISOString();
   let row;
   if(existingIdx>=0){
@@ -8171,6 +8234,9 @@ async function addShiftAssignment(shiftId, userId, role, staffName, silent){
       all[existingIdx].status = 'assigned';
       all[existingIdx].assignedBy = (typeof CU!=='undefined' && CU)?CU.id:null;
       all[existingIdx].assignedAt = nowISO;
+      // [Phase HR1c.5.5.2a-hotfix] Backfill missing key on reactivation if newly known.
+      if(staffId && !all[existingIdx].staffId) all[existingIdx].staffId = staffId;
+      if(userId && !all[existingIdx].userId) all[existingIdx].userId = userId;
       row = all[existingIdx];
     } else {
       if(!silent && typeof toast==='function') toast('Already assigned','warn');
@@ -8178,10 +8244,11 @@ async function addShiftAssignment(shiftId, userId, role, staffName, silent){
     }
   } else {
     row = {
-      id: _schedAssignmentId(shiftId, userId),
-      shiftId: shiftId, userId: userId,
-      staffId: (typeof _resolveStaffIdForUser==='function') ? _resolveStaffIdForUser(userId) : null, // [Phase HR1c.5.4] dual-write
-      staffName: staffName || userId,
+      id: _schedAssignmentId(shiftId, stableKey),
+      shiftId: shiftId,
+      userId: userId,   // [Phase HR1c.5.5.2a-hotfix] Always-both-keys · null when unknown.
+      staffId: staffId, // [Phase HR1c.5.5.2a-hotfix] Always-both-keys · null when unknown.
+      staffName: staffName || stableKey,
       role: role,
       status: 'assigned',
       assignedBy: (typeof CU!=='undefined' && CU)?CU.id:null,
@@ -8192,8 +8259,8 @@ async function addShiftAssignment(shiftId, userId, role, staffName, silent){
   }
   if(typeof saveShiftAssignments==='function') saveShiftAssignments(all);
   await _pushShiftAssignment(row);
-  if(typeof logAccess==='function') logAccess('hr.shift.assigned', row.id, shiftId+'|'+userId+'|'+role);
-  if(!silent && typeof toast==='function') toast('✅ '+(staffName||userId)+' assigned','ok');
+  if(typeof logAccess==='function') logAccess('hr.shift.assigned', row.id, shiftId+'|'+(staffId||'')+'|'+(userId||'')+'|'+role);
+  if(!silent && typeof toast==='function') toast('✅ '+(staffName||stableKey)+' assigned','ok');
   return true;
 }
 window.addShiftAssignment = addShiftAssignment;
