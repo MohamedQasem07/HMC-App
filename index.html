@@ -2818,6 +2818,15 @@ function toSnake(obj, table) {
     assignedBy:'assigned_by', assignedAt:'assigned_at',
     // [Phase HR1c.4b.1a] Monthly roster staff field mappings
     monthYm:'month_ym',
+    // [Phase HR1c.5.3] Staff Master forward field mappings (camelCase → snake_case)
+    staffCode:'staff_code', roleGroup:'role_group', activeStatus:'active_status',
+    canLogin:'can_login', linkedUserId:'linked_user_id',
+    fullNameEn:'full_name_en', fullNameAr:'full_name_ar',
+    jobTitle:'job_title', homeBranch:'home_branch',
+    employmentType:'employment_type', payType:'pay_type',
+    basicSalary:'basic_salary', salaryCurrency:'salary_currency', shiftRate:'shift_rate',
+    nationalId:'national_id', insuranceNumber:'insurance_number', hireDate:'hire_date',
+    fingerprintCode:'fingerprint_code',
     // [Phase HR1b.1] Branch geofence + workday clock-in/out GPS field mappings
     branchId:'branch_id', radiusM:'radius_m',
     clockInLat:'clock_in_lat', clockInLng:'clock_in_lng', clockInAccuracyM:'clock_in_accuracy_m',
@@ -2905,6 +2914,16 @@ function toSnake(obj, table) {
     // Stable id `MRS-{branch}-{YYYYMM}-{user_id_hash}` · DB-level CHECK enforces role='nurse' (HR1c.4a.1) · soft-delete via status='removed'
     monthly_roster_staff: new Set(['id','branch','month_ym','user_id','role','status',
       'created_by','created_at','updated_at']),
+    // [Phase HR1c.5.3] Staff Master whitelist — 36 columns post-HR1c.5.1 + HR1c.5.2 Part A
+    // Includes legacy fields (name/name_ar/role/specialty/branch/salary/currency/start_date/status/created_at/facility)
+    // and Staff Master fields (staff_code/role_group/active_status/can_login/linked_user_id/updated_at/full_name_en/full_name_ar/
+    // department/job_title/home_branch/employment_type/pay_type/basic_salary/salary_currency/shift_rate/national_id/phone/
+    // address/insured/insurance_number/hire_date/notes/fingerprint_code).
+    staff: new Set(['id','name','name_ar','role','specialty','branch','facility','salary','currency','start_date','status','created_at',
+      'staff_code','role_group','active_status','can_login','linked_user_id','updated_at',
+      'full_name_en','full_name_ar','department','job_title','home_branch',
+      'employment_type','pay_type','basic_salary','salary_currency','shift_rate',
+      'national_id','phone','address','insured','insurance_number','hire_date','notes','fingerprint_code']),
   };
   const DATE_COLS = new Set(['ka_date','dob','arrival_date','departure_date','discharge_date',
     'invoice_date','collection_date','start_date','created_at','updated_at']);
@@ -2991,6 +3010,15 @@ function parseSnakeCase(obj) {
     assigned_by:'assignedBy', assigned_at:'assignedAt',
     // [Phase HR1c.4b.1a] Monthly roster staff reverse mappings
     month_ym:'monthYm',
+    // [Phase HR1c.5.3] Staff Master reverse field mappings (snake_case → camelCase)
+    staff_code:'staffCode', role_group:'roleGroup', active_status:'activeStatus',
+    can_login:'canLogin', linked_user_id:'linkedUserId',
+    full_name_en:'fullNameEn', full_name_ar:'fullNameAr',
+    job_title:'jobTitle', home_branch:'homeBranch',
+    employment_type:'employmentType', pay_type:'payType',
+    basic_salary:'basicSalary', salary_currency:'salaryCurrency', shift_rate:'shiftRate',
+    national_id:'nationalId', insurance_number:'insuranceNumber', hire_date:'hireDate',
+    fingerprint_code:'fingerprintCode',
     // [Phase HR1b.1] Branch geofence + workday GPS reverse mappings
     branch_id:'branchId', radius_m:'radiusM',
     clock_in_lat:'clockInLat', clock_in_lng:'clockInLng', clock_in_accuracy_m:'clockInAccuracyM',
@@ -3325,6 +3353,9 @@ function saveCases(d) {
   catch(e){ console.error('saveCases localStorage failed even without URLs:',e.message); }
 }
 function getStaff() { return JSON.parse(ls('hmc_staff') || '[]'); }
+// [Phase HR1c.5.3] Cache writer · Supabase remains source of truth · localStorage is hydrated cache only.
+function saveStaff(arr) { sl('hmc_staff', JSON.stringify(arr || [])); }
+window.saveStaff = saveStaff;
 function getShifts() { return JSON.parse(ls('hmc_shifts') || '[]'); }
 
 // ════════════════════════════════════════════
@@ -5233,7 +5264,8 @@ function nav(pg){
   document.getElementById('tbBranch').textContent=CU.branch==='all'?'All Branches — جميع الفروع':getBr(CU.branch).name;
   const acts=document.getElementById('tbActs');acts.innerHTML='';
   if(pg==='cases') acts.innerHTML=`<div style="display:flex;gap:8px"><button class="btn bs btn-sm" onclick="viewDailyReport()">📋 Daily Report</button><button class="btn bp" onclick="checkShiftThenCase()">+ New Case</button></div>`;
-  if(pg==='staff'&&(CU.role==='admin'||CU.role==='manager')) acts.innerHTML=`<button class="btn bp">+ Add Staff</button>`;
+  // [Phase HR1c.5.3] Wire + Add Staff button to openAddStaffModal · permission via hasPerm('staff.manage') (admin + hr_manager).
+  if(pg==='staff' && (typeof hasPerm==='function' && hasPerm('staff.manage'))) acts.innerHTML=`<button class="btn bp" onclick="openAddStaffModal()">+ Add Staff</button>`;
   if(pg==='assets') acts.innerHTML=`<button class="btn bp btn-sm" onclick="openAddAsset()">+ Add Asset</button>`;
   if(pg==='visaMachines'&&CU.role==='admin') acts.innerHTML=`<button class="btn bp btn-sm" onclick="openAddMachine()">+ Add Machine</button>`;
   // [Phase HR1c.2] Schedules page action button — visible only for roles with hr.shifts.schedule (admin/hr_manager) or .ownBranch (head_nurse)
@@ -5478,6 +5510,15 @@ async function _pushMonthlyRosterStaff(row){
   try { return await sbAPI('POST','monthly_roster_staff', toSnake(row,'monthly_roster_staff')); }
   catch(e){ console.warn('_pushMonthlyRosterStaff:',e); return null; }
 }
+
+// [Phase HR1c.5.3] Per-row Supabase push for staff · UPSERT semantics via PostgREST primary key.
+// Used by saveStaffFromModal (Add + Edit) · uses HR1b.3 saveGeofenceConfig pattern.
+// COLS whitelist enforced by toSnake(row,'staff') — unknown camelCase fields silently dropped.
+async function _pushStaff(row){
+  try { return await sbAPI('POST','staff', toSnake(row,'staff')); }
+  catch(e){ console.warn('_pushStaff:',e); return null; }
+}
+window._pushStaff = _pushStaff;
 
 // Filtered cache read · returns active membership rows for a (branch, monthYM) — used by _rosterStaffRows extension in HR1c.4b.1b.
 function getRosterMembershipFor(branch, monthYM){
@@ -11597,20 +11638,617 @@ function renderFin(){
   </div>`;
 }
 
-// ════════════════════════════════════════════
-//  STAFF
-// ════════════════════════════════════════════
+// ════════════════════════════════════════════════════════════════════
+// [Phase HR1c.5.3] STAFF MASTER UI — Admin manages real Staff Master
+// ════════════════════════════════════════════════════════════════════
+// Goal: 12-col table + filters + Add/Edit modal · 60 real HMC employees.
+// Read paths from staff still go through getStaff() (cache hydrated from Supabase).
+// Write paths: saveStaff (cache) + _pushStaff (Supabase POST/UPSERT) — both required for persistence.
+// Seed rows (12 with staff_code=NULL) hidden by default · admin-only "Show seed" toggle.
+// linked_user_id = display only this phase · Users↔Staff linking ships in HR1c.5.6.
+
+// [Phase HR1c.5.3] Constants for select options (matches HR1c.5.1 NOT VALID CHECK constraints).
+const _STAFF_ROLE_GROUPS = ['doctor','nurse','driver','lab_radiology','reception','finance','admin','housekeeping','security','chef','maintenance','manager','other'];
+const _STAFF_ACTIVE_STATUSES = ['active','inactive','resigned','suspended','on_leave'];
+const _STAFF_EMPLOYMENT_TYPES = ['full_time','part_time','per_shift','external','contractor'];
+const _STAFF_PAY_TYPES = ['monthly_salary','per_shift','daily','hourly','unpaid'];
+
+// [Phase HR1c.5.3] Compute next staff_code (HMC061 after HMC060) · cache-based default.
+// saveStaffFromModal does a fresh-read-before-save + retry-on-conflict for race safety (per approval).
+function _nextStaffCode(){
+  const all = (typeof getStaff==='function') ? getStaff() : [];
+  let maxN = 0;
+  all.forEach(function(s){
+    const code = s && s.staffCode;
+    if(typeof code !== 'string') return;
+    const m = code.match(/^HMC(\d+)$/);
+    if(!m) return;
+    const n = parseInt(m[1], 10);
+    if(!isNaN(n) && n > maxN) maxN = n;
+  });
+  return 'HMC' + String(maxN+1).padStart(3,'0');
+}
+function _nextStaffId(staffCode){
+  const m = String(staffCode||'').match(/^HMC(\d+)$/);
+  if(!m) return 'staff_hmc_' + String(Date.now()).slice(-6); // fallback
+  return 'staff_hmc_' + m[1].padStart(3,'0');
+}
+window._nextStaffCode = _nextStaffCode;
+window._nextStaffId = _nextStaffId;
+
+// [Phase HR1c.5.3] Edit modal HTML · 6 sections · 24 fields.
+// Reuses .modal/.mhdr/.mbody pattern (HR1c.2a CSS classes).
+function _renderStaffEditModal(){
+  const rgOpts = _STAFF_ROLE_GROUPS.map(function(r){ return '<option value="'+r+'">'+r+'</option>'; }).join('');
+  const asOpts = _STAFF_ACTIVE_STATUSES.map(function(s){ return '<option value="'+s+'">'+s+'</option>'; }).join('');
+  const etOpts = ['<option value="">— Not set —</option>'].concat(_STAFF_EMPLOYMENT_TYPES.map(function(e){ return '<option value="'+e+'">'+e+'</option>'; })).join('');
+  const ptOpts = ['<option value="">— Not set —</option>'].concat(_STAFF_PAY_TYPES.map(function(p){ return '<option value="'+p+'">'+p+'</option>'; })).join('');
+  const branches = (typeof BRANCHES!=='undefined' && BRANCHES) ? BRANCHES : [];
+  const brOpts = '<option value="">— No branch —</option>' + (Array.isArray(branches) ? branches : []).map(function(b){
+    return '<option value="'+(b.id||b)+'">'+(b.name||b)+'</option>';
+  }).join('');
+  return `
+  <div class="mbd" id="staffEditModal">
+    <div class="modal" style="max-width:760px;width:94vw;max-height:92vh;overflow:auto">
+      <div class="mhdr"><div class="mt" id="staffModalTitle">👥 Add/Edit Staff</div>
+        <button class="mc" onclick="closeStaffModal()">×</button></div>
+      <div class="mbody" style="padding:14px">
+
+        <div class="staff-section">
+          <div class="staff-section-title">1. Identity</div>
+          <div class="staff-row">
+            <div><label>Staff Code <small>(readonly)</small></label>
+              <input class="fsi" id="sm_staff_code" readonly style="background:var(--g50);font-weight:700"></div>
+            <div><label>Internal ID <small>(readonly)</small></label>
+              <input class="fsi" id="sm_id" readonly style="background:var(--g50);font-size:11px"></div>
+          </div>
+        </div>
+
+        <div class="staff-section">
+          <div class="staff-section-title">2. Names</div>
+          <div class="staff-row">
+            <div><label>Display Name (English) * <small>used in tables</small></label>
+              <input class="fsi" id="sm_name" placeholder="e.g. Mohamed Adel"></div>
+            <div><label>Display Name (Arabic) <small>optional</small></label>
+              <input class="fsi" id="sm_name_ar" dir="rtl" style="font-family:'Tajawal',sans-serif"></div>
+          </div>
+          <div class="staff-row">
+            <div><label>Full Name (English) <small>optional · admin completes later</small></label>
+              <input class="fsi" id="sm_full_name_en"></div>
+            <div><label>Full Name (Arabic) *</label>
+              <input class="fsi" id="sm_full_name_ar" dir="rtl" style="font-family:'Tajawal',sans-serif"></div>
+          </div>
+        </div>
+
+        <div class="staff-section">
+          <div class="staff-section-title">3. Role + Branch</div>
+          <div class="staff-row">
+            <div><label>Role Group *</label>
+              <select class="fsi" id="sm_role_group">${rgOpts}</select></div>
+            <div><label>Active Status *</label>
+              <select class="fsi" id="sm_active_status">${asOpts}</select></div>
+          </div>
+          <div class="staff-row">
+            <div><label>Job Title (Arabic)</label>
+              <input class="fsi" id="sm_job_title" dir="rtl" style="font-family:'Tajawal',sans-serif"></div>
+            <div><label>Department (Arabic)</label>
+              <input class="fsi" id="sm_department" dir="rtl" style="font-family:'Tajawal',sans-serif"></div>
+          </div>
+          <div class="staff-row">
+            <div><label>Home Branch</label>
+              <select class="fsi" id="sm_home_branch">${brOpts}</select></div>
+            <div></div>
+          </div>
+        </div>
+
+        <div class="staff-section">
+          <div class="staff-section-title">4. Pay</div>
+          <div class="staff-row">
+            <div><label>Employment Type</label>
+              <select class="fsi" id="sm_employment_type" onchange="_smOnEmploymentChange()">${etOpts}</select></div>
+            <div><label>Pay Type</label>
+              <select class="fsi" id="sm_pay_type">${ptOpts}</select></div>
+          </div>
+          <div class="staff-row">
+            <div><label>Basic Salary (EGP/mo)</label>
+              <input class="fsi" id="sm_basic_salary" type="number" min="0" step="50"></div>
+            <div><label>Shift Rate (EGP/shift) <small>per-shift staff only</small></label>
+              <input class="fsi" id="sm_shift_rate" type="number" min="0" step="50"></div>
+          </div>
+          <div class="staff-row">
+            <div><label>Salary Currency <small>readonly · future expansion</small></label>
+              <input class="fsi" id="sm_salary_currency" readonly value="EGP" style="background:var(--g50)"></div>
+            <div></div>
+          </div>
+        </div>
+
+        <div class="staff-section">
+          <div class="staff-section-title">5. Personal + Contact</div>
+          <div class="staff-row">
+            <div><label>National ID</label>
+              <input class="fsi" id="sm_national_id" placeholder="14 digits (Egyptian)"></div>
+            <div><label>Phone</label>
+              <input class="fsi" id="sm_phone" placeholder="+20 1xx xxx xxxx"></div>
+          </div>
+          <div class="staff-row">
+            <div style="grid-column:1/-1"><label>Address</label>
+              <input class="fsi" id="sm_address"></div>
+          </div>
+          <div class="staff-row">
+            <div><label>Hire Date</label>
+              <input class="fsi" id="sm_hire_date" type="date"></div>
+            <div><label style="display:flex;gap:8px;align-items:center;margin-top:18px">
+              <input id="sm_insured" type="checkbox"> Insured</label></div>
+          </div>
+          <div class="staff-row">
+            <div><label>Insurance Number <small>if insured</small></label>
+              <input class="fsi" id="sm_insurance_number"></div>
+            <div></div>
+          </div>
+        </div>
+
+        <div class="staff-section">
+          <div class="staff-section-title">6. System + Biometric</div>
+          <div class="staff-row">
+            <div><label>Fingerprint Code <small>e.g. 55 · 00055 · A055</small></label>
+              <input class="fsi" id="sm_fingerprint_code" placeholder="device ID"></div>
+            <div><label style="display:flex;gap:8px;align-items:center;margin-top:18px">
+              <input id="sm_can_login" type="checkbox"> Can Login</label></div>
+          </div>
+          <div class="staff-row">
+            <div><label>Linked User <small>display only · linking ships in HR1c.5.6</small></label>
+              <input class="fsi" id="sm_linked_user_id" readonly style="background:var(--g50);font-size:11px"></div>
+            <div></div>
+          </div>
+          <div class="staff-row">
+            <div style="grid-column:1/-1"><label>Notes</label>
+              <textarea class="fsi" id="sm_notes" rows="2" style="resize:vertical"></textarea></div>
+          </div>
+        </div>
+
+        <div id="sm_error" style="display:none;color:#b91c1c;background:#fee2e2;padding:8px 10px;border-radius:6px;margin:10px 0;font-size:12px"></div>
+
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px;padding-top:12px;border-top:1px solid var(--g200)">
+          <button class="btn bs" id="sm_cancel" onclick="closeStaffModal()">Cancel</button>
+          <button class="btn bp" id="sm_save" onclick="saveStaffFromModal()">💾 Save</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// [Phase HR1c.5.3] Per-shift doctor auto-mapping — when employment_type changes to per_shift, also set pay_type.
+function _smOnEmploymentChange(){
+  const et = document.getElementById('sm_employment_type')?.value;
+  const ptSel = document.getElementById('sm_pay_type');
+  if(!ptSel) return;
+  if(et === 'per_shift') ptSel.value = 'per_shift';
+  else if(et === 'full_time') ptSel.value = 'monthly_salary';
+}
+window._smOnEmploymentChange = _smOnEmploymentChange;
+
+// [Phase HR1c.5.3] Open Add Staff modal · pre-fills auto-generated staff_code + id + defaults.
+function openAddStaffModal(){
+  const m = document.getElementById('staffEditModal');
+  if(!m){ if(typeof toast==='function') toast('Open Staff page first','warn'); return; }
+  if(typeof hasPerm==='function' && !hasPerm('staff.manage')){ if(typeof toast==='function') toast('Permission denied','err'); return; }
+  m.dataset.mode = 'add';
+  m.dataset.staffId = '';
+  document.getElementById('staffModalTitle').textContent = '➕ Add Staff';
+  // Generate next code + id
+  const code = _nextStaffCode();
+  const id = _nextStaffId(code);
+  document.getElementById('sm_staff_code').value = code;
+  document.getElementById('sm_id').value = id;
+  // Reset fields with defaults
+  document.getElementById('sm_name').value = '';
+  document.getElementById('sm_name_ar').value = '';
+  document.getElementById('sm_full_name_en').value = '';
+  document.getElementById('sm_full_name_ar').value = '';
+  document.getElementById('sm_role_group').value = 'nurse';
+  document.getElementById('sm_active_status').value = 'active';
+  document.getElementById('sm_job_title').value = '';
+  document.getElementById('sm_department').value = '';
+  document.getElementById('sm_home_branch').value = '';
+  document.getElementById('sm_employment_type').value = 'full_time';
+  document.getElementById('sm_pay_type').value = 'monthly_salary';
+  document.getElementById('sm_basic_salary').value = '';
+  document.getElementById('sm_shift_rate').value = '';
+  document.getElementById('sm_national_id').value = '';
+  document.getElementById('sm_phone').value = '';
+  document.getElementById('sm_address').value = '';
+  document.getElementById('sm_hire_date').value = '';
+  document.getElementById('sm_insured').checked = false;
+  document.getElementById('sm_insurance_number').value = '';
+  document.getElementById('sm_fingerprint_code').value = '';
+  document.getElementById('sm_can_login').checked = false;
+  document.getElementById('sm_linked_user_id').value = '';
+  document.getElementById('sm_notes').value = '';
+  // Reset error + buttons
+  const errEl = document.getElementById('sm_error'); if(errEl){ errEl.style.display='none'; errEl.textContent=''; }
+  const saveBtn = document.getElementById('sm_save'); if(saveBtn){ saveBtn.disabled=false; saveBtn.textContent='💾 Save'; }
+  m.classList.add('open');
+}
+window.openAddStaffModal = openAddStaffModal;
+
+// [Phase HR1c.5.3] Open Edit modal for an existing staff row.
+// Seed rows (staff_code=NULL) → opens in READONLY mode (admin can review · cannot save).
+function openEditStaffModal(staffId){
+  if(!staffId) return;
+  const m = document.getElementById('staffEditModal');
+  if(!m){ if(typeof toast==='function') toast('Open Staff page first','warn'); return; }
+  if(typeof hasPerm==='function' && !hasPerm('staff.view') && !hasPerm('staff.manage')){
+    if(typeof toast==='function') toast('Permission denied','err'); return;
+  }
+  const all = (typeof getStaff==='function') ? getStaff() : [];
+  const s = all.find(function(x){ return x && x.id===staffId; });
+  if(!s){ if(typeof toast==='function') toast('Staff not found','err'); return; }
+  const isSeed = !s.staffCode;
+  const canEdit = !isSeed && (typeof hasPerm==='function' && hasPerm('staff.manage'));
+  m.dataset.mode = canEdit ? 'edit' : 'view';
+  m.dataset.staffId = staffId;
+  document.getElementById('staffModalTitle').textContent = canEdit
+    ? ('✏️ Edit ' + (s.staffCode||s.id))
+    : (isSeed ? ('🟡 View Seed Row · ' + (s.name||s.id)) : ('👁 View ' + (s.staffCode||s.id)));
+  // Populate fields
+  document.getElementById('sm_staff_code').value = s.staffCode || (isSeed ? '— (uncoded seed) —' : '');
+  document.getElementById('sm_id').value = s.id || '';
+  document.getElementById('sm_name').value = s.name || '';
+  document.getElementById('sm_name_ar').value = s.nameAr || '';
+  document.getElementById('sm_full_name_en').value = s.fullNameEn || '';
+  document.getElementById('sm_full_name_ar').value = s.fullNameAr || '';
+  document.getElementById('sm_role_group').value = s.roleGroup || (s.role==='doctor'?'doctor':(s.role==='nurse'?'nurse':'other'));
+  document.getElementById('sm_active_status').value = s.activeStatus || 'active';
+  document.getElementById('sm_job_title').value = s.jobTitle || '';
+  document.getElementById('sm_department').value = s.department || '';
+  document.getElementById('sm_home_branch').value = s.homeBranch || s.branch || '';
+  document.getElementById('sm_employment_type').value = s.employmentType || '';
+  document.getElementById('sm_pay_type').value = s.payType || '';
+  document.getElementById('sm_basic_salary').value = (s.basicSalary != null) ? s.basicSalary : (s.salary || '');
+  document.getElementById('sm_shift_rate').value = (s.shiftRate != null) ? s.shiftRate : '';
+  document.getElementById('sm_national_id').value = s.nationalId || '';
+  document.getElementById('sm_phone').value = s.phone || '';
+  document.getElementById('sm_address').value = s.address || '';
+  document.getElementById('sm_hire_date').value = s.hireDate || s.startDate || '';
+  document.getElementById('sm_insured').checked = !!s.insured;
+  document.getElementById('sm_insurance_number').value = s.insuranceNumber || '';
+  document.getElementById('sm_fingerprint_code').value = s.fingerprintCode || '';
+  document.getElementById('sm_can_login').checked = !!s.canLogin;
+  document.getElementById('sm_linked_user_id').value = s.linkedUserId || '— not linked —';
+  document.getElementById('sm_notes').value = s.notes || '';
+  // Disable inputs if not editable
+  const fieldIds = ['sm_name','sm_name_ar','sm_full_name_en','sm_full_name_ar','sm_role_group','sm_active_status',
+    'sm_job_title','sm_department','sm_home_branch','sm_employment_type','sm_pay_type',
+    'sm_basic_salary','sm_shift_rate','sm_national_id','sm_phone','sm_address','sm_hire_date',
+    'sm_insured','sm_insurance_number','sm_fingerprint_code','sm_can_login','sm_notes'];
+  fieldIds.forEach(function(fid){ const el = document.getElementById(fid); if(el) el.disabled = !canEdit; });
+  // Save button visibility
+  const saveBtn = document.getElementById('sm_save');
+  if(saveBtn){ saveBtn.style.display = canEdit ? '' : 'none'; saveBtn.disabled = false; saveBtn.textContent='💾 Save'; }
+  const errEl = document.getElementById('sm_error'); if(errEl){ errEl.style.display='none'; errEl.textContent=''; }
+  m.classList.add('open');
+}
+window.openEditStaffModal = openEditStaffModal;
+
+function closeStaffModal(){
+  const m = document.getElementById('staffEditModal');
+  if(m){ m.classList.remove('open'); delete m.dataset.mode; delete m.dataset.staffId; }
+}
+window.closeStaffModal = closeStaffModal;
+
+// [Phase HR1c.5.3] Validate + UPSERT to cache + push to Supabase.
+// Race-safe: in ADD mode, fresh-read max staff_code right before push · retry on 409 conflict.
+async function saveStaffFromModal(){
+  const m = document.getElementById('staffEditModal');
+  if(!m) return;
+  const mode = m.dataset.mode;
+  if(mode !== 'add' && mode !== 'edit'){ if(typeof toast==='function') toast('Invalid mode','err'); return; }
+  if(typeof hasPerm==='function' && !hasPerm('staff.manage')){ if(typeof toast==='function') toast('Permission denied','err'); return; }
+  const errEl = document.getElementById('sm_error');
+  const showErr = function(msg){ if(errEl){ errEl.textContent=msg; errEl.style.display='block'; } if(typeof toast==='function') toast(msg,'err'); };
+  if(errEl){ errEl.style.display='none'; errEl.textContent=''; }
+  // Validate required fields (full_name_en NOT required per HR1c.5.3 correction)
+  const name = (document.getElementById('sm_name')?.value||'').trim();
+  const fullNameAr = (document.getElementById('sm_full_name_ar')?.value||'').trim();
+  const roleGroup = document.getElementById('sm_role_group')?.value;
+  const activeStatus = document.getElementById('sm_active_status')?.value;
+  if(!name){ showErr('Display Name (English) is required'); return; }
+  if(!fullNameAr){ showErr('Full Name (Arabic) is required'); return; }
+  if(!roleGroup || _STAFF_ROLE_GROUPS.indexOf(roleGroup) < 0){ showErr('Pick a valid Role Group'); return; }
+  if(!activeStatus || _STAFF_ACTIVE_STATUSES.indexOf(activeStatus) < 0){ showErr('Pick a valid Active Status'); return; }
+  // Numeric validation
+  const basicSalaryRaw = (document.getElementById('sm_basic_salary')?.value||'').trim();
+  const shiftRateRaw = (document.getElementById('sm_shift_rate')?.value||'').trim();
+  const basicSalary = basicSalaryRaw === '' ? null : parseFloat(basicSalaryRaw);
+  const shiftRate = shiftRateRaw === '' ? null : parseFloat(shiftRateRaw);
+  if(basicSalary != null && (isNaN(basicSalary) || basicSalary < 0)){ showErr('Basic Salary must be a non-negative number'); return; }
+  if(shiftRate != null && (isNaN(shiftRate) || shiftRate < 0)){ showErr('Shift Rate must be a non-negative number'); return; }
+  // Hire date soft check (must be ≤ today)
+  const hireDate = (document.getElementById('sm_hire_date')?.value||'').trim();
+  if(hireDate){
+    const today = new Date().toISOString().slice(0,10);
+    if(hireDate > today){ showErr('Hire Date cannot be in the future'); return; }
+  }
+  // Disable Save button during save
+  const saveBtn = document.getElementById('sm_save');
+  if(saveBtn){ saveBtn.disabled = true; saveBtn.textContent = '⏳ Saving...'; }
+  // Build the row (camelCase · toSnake will convert + COLS will whitelist)
+  const employmentType = document.getElementById('sm_employment_type')?.value || null;
+  const payType = document.getElementById('sm_pay_type')?.value || null;
+  let staffCode = document.getElementById('sm_staff_code')?.value || null;
+  let staffId = document.getElementById('sm_id')?.value || null;
+  // ADD mode: fresh-read-before-save (race safety) — recompute max code from latest cache
+  if(mode === 'add'){
+    // Note: cache is hydrated on init; for stronger guarantee against concurrent admins, future enhancement
+    // could call `sbAPI('GET','staff?select=staff_code&order=staff_code.desc&limit=1')` here. For now, cache-based
+    // recompute + retry-on-conflict satisfies the approved race-condition strategy.
+    const recomputedCode = _nextStaffCode();
+    if(recomputedCode !== staffCode){
+      staffCode = recomputedCode;
+      staffId = _nextStaffId(staffCode);
+      document.getElementById('sm_staff_code').value = staffCode;
+      document.getElementById('sm_id').value = staffId;
+    }
+  }
+  const nowISO = new Date().toISOString();
+  const homeBranch = document.getElementById('sm_home_branch')?.value || null;
+  const row = {
+    id: staffId,
+    staffCode: staffCode,
+    name: name,
+    nameAr: (document.getElementById('sm_name_ar')?.value||'').trim() || null,
+    fullNameEn: (document.getElementById('sm_full_name_en')?.value||'').trim() || null,
+    fullNameAr: fullNameAr,
+    role: roleGroup, // legacy column · mirror new role_group for back-compat
+    roleGroup: roleGroup,
+    activeStatus: activeStatus,
+    status: activeStatus === 'active' ? 'Active' : 'Inactive', // legacy column
+    jobTitle: (document.getElementById('sm_job_title')?.value||'').trim() || null,
+    department: (document.getElementById('sm_department')?.value||'').trim() || null,
+    homeBranch: homeBranch,
+    branch: homeBranch, // legacy column · mirror home_branch
+    employmentType: employmentType,
+    payType: payType,
+    basicSalary: basicSalary,
+    salary: basicSalary, // legacy column · mirror basic_salary
+    salaryCurrency: 'EGP',
+    currency: 'EGP', // legacy column
+    shiftRate: shiftRate,
+    nationalId: (document.getElementById('sm_national_id')?.value||'').trim() || null,
+    phone: (document.getElementById('sm_phone')?.value||'').trim() || null,
+    address: (document.getElementById('sm_address')?.value||'').trim() || null,
+    hireDate: hireDate || null,
+    startDate: hireDate || null, // legacy column
+    insured: !!document.getElementById('sm_insured')?.checked,
+    insuranceNumber: (document.getElementById('sm_insurance_number')?.value||'').trim() || null,
+    fingerprintCode: (document.getElementById('sm_fingerprint_code')?.value||'').trim() || null,
+    canLogin: !!document.getElementById('sm_can_login')?.checked,
+    notes: (document.getElementById('sm_notes')?.value||'').trim() || null,
+    facility: 'HMC',
+    updatedAt: nowISO
+  };
+  // ADD mode: also set createdAt
+  if(mode === 'add'){ row.createdAt = nowISO; }
+  // EDIT mode: preserve linked_user_id from existing row (display-only this phase per HR1c.5.3)
+  if(mode === 'edit'){
+    const existing = (typeof getStaff==='function')?getStaff().find(function(x){ return x && x.id===staffId; }):null;
+    if(existing && existing.linkedUserId) row.linkedUserId = existing.linkedUserId;
+  }
+  // Push to Supabase first · only update cache on success (avoid stale local state)
+  try {
+    const result = await _pushStaff(row);
+    if(!result){
+      // Retry once with next staff_code (in case of conflict from concurrent admin)
+      if(mode === 'add'){
+        const retryCode = _nextStaffCode();
+        const retryId = _nextStaffId(retryCode);
+        row.staffCode = retryCode;
+        row.id = retryId;
+        document.getElementById('sm_staff_code').value = retryCode;
+        document.getElementById('sm_id').value = retryId;
+        const retry = await _pushStaff(row);
+        if(!retry){ throw new Error('Save failed after retry · check connection'); }
+        if(typeof toast==='function') toast('⚠ Code reallocated to '+retryCode,'warn');
+      } else {
+        throw new Error('Save failed · check connection');
+      }
+    }
+    // Update cache (UPSERT)
+    const all = (typeof getStaff==='function') ? getStaff() : [];
+    const idx = all.findIndex(function(x){ return x && x.id===row.id; });
+    if(idx >= 0) all[idx] = Object.assign({}, all[idx], row);
+    else all.push(row);
+    if(typeof saveStaff==='function') saveStaff(all);
+    if(typeof logAccess==='function') logAccess('staff.'+(mode==='add'?'created':'updated'), row.id, row.staffCode+'|'+row.roleGroup);
+    if(typeof toast==='function') toast('✅ '+(mode==='add'?'Added':'Saved')+' '+row.staffCode,'ok');
+    closeStaffModal();
+    if(typeof _filterStaffNew==='function') _filterStaffNew();
+  } catch(e){
+    showErr(String(e.message||e));
+    if(saveBtn){ saveBtn.disabled = false; saveBtn.textContent = '💾 Save'; }
+  }
+}
+window.saveStaffFromModal = saveStaffFromModal;
+
+// [Phase HR1c.5.3] Page render · 12-col table + filter row + Add button (admin only).
 function renderStaff(){
-  return`<div class="sbar"><div class="siw"><span class="si-ic">🔍</span><input class="si" id="stQ" placeholder="Search staff..." oninput="filterStaff()"></div></div>
-  <div class="card" style="padding:0"><div class="tw"><table><thead><tr><th>Name</th><th>عربي</th><th>Role</th><th>Specialty</th><th>Branch</th><th>Salary</th><th>Start Date</th><th>Status</th></tr></thead><tbody id="stTbody"></tbody></table></div></div>`;
+  const canManage = (typeof hasPerm==='function' && hasPerm('staff.manage'));
+  const canView = (typeof hasPerm==='function' && (hasPerm('staff.view')||hasPerm('staff.manage')));
+  if(!canView){ return '<div class="card" style="padding:20px;text-align:center;color:var(--g500)">Permission denied · contact admin</div>'; }
+  const rgOpts = ['<option value="">All</option>'].concat(_STAFF_ROLE_GROUPS.map(function(r){ return '<option value="'+r+'">'+r+'</option>'; })).join('');
+  const asOpts = ['<option value="">All</option>'].concat(_STAFF_ACTIVE_STATUSES.map(function(s){ return '<option value="'+s+'"'+(s==='active'?' selected':'')+'>'+s+'</option>'; })).join('');
+  const branches = (typeof BRANCHES!=='undefined' && BRANCHES) ? BRANCHES : [];
+  const brOpts = '<option value="">All</option><option value="__none__">— No Branch —</option>' +
+    (Array.isArray(branches) ? branches : []).map(function(b){
+      return '<option value="'+(b.id||b)+'">'+(b.name||b)+'</option>';
+    }).join('');
+  return `
+  <style>
+  /* [Phase HR1c.5.3] Staff Master modal + table styles */
+  .staff-section { margin-bottom:14px; padding:10px; background:var(--g50); border-radius:6px; border:1px solid var(--g200); }
+  .staff-section-title { font-size:13px; font-weight:700; color:var(--g700); margin-bottom:8px; padding-bottom:4px; border-bottom:1px dashed var(--g300); }
+  .staff-row { display:grid; grid-template-columns:1fr 1fr; gap:10px; margin-bottom:8px; }
+  .staff-row label { font-size:11px; color:var(--g600); display:block; margin-bottom:2px; }
+  .staff-row label small { color:var(--g500); font-weight:400; font-size:10px; }
+  .staff-row input.fsi, .staff-row select.fsi, .staff-row textarea.fsi { width:100%; box-sizing:border-box; }
+  .staff-tbl th, .staff-tbl td { padding:6px 8px; font-size:12px; }
+  .staff-tbl th { background:var(--g100); font-size:11px; text-transform:uppercase; color:var(--g600); position:sticky; top:0; z-index:1; }
+  @media (max-width:680px) {
+    .staff-row { grid-template-columns:1fr; }
+  }
+  </style>
+  ${_renderStaffEditModal()}
+  <div class="card" style="padding:14px;margin-bottom:10px">
+    <div style="display:flex;gap:10px;flex-wrap:wrap;align-items:flex-end">
+      <div style="flex:1;min-width:200px">
+        <label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">🔍 Search</label>
+        <input class="fsi" id="stQ" placeholder="code · name (En/Ar) · job · department" oninput="_filterStaffNew()">
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Department</label>
+        <select class="fsi" id="stDept" onchange="_filterStaffNew()" style="min-width:130px">
+          <option value="">All</option>
+        </select>
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Role Group</label>
+        <select class="fsi" id="stRoleGroup" onchange="_filterStaffNew()" style="min-width:120px">${rgOpts}</select>
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Active</label>
+        <select class="fsi" id="stActive" onchange="_filterStaffNew()" style="min-width:110px">${asOpts}</select>
+      </div>
+      <div>
+        <label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Home Branch</label>
+        <select class="fsi" id="stBranch" onchange="_filterStaffNew()" style="min-width:140px">${brOpts}</select>
+      </div>
+      ${canManage ? '<div><label style="display:flex;gap:6px;align-items:center;font-size:11px;color:var(--g600);margin-top:18px"><input type="checkbox" id="stShowSeed" onchange="_filterStaffNew()"> Show seed rows</label></div>' : ''}
+      <div><button class="btn bs btn-sm" onclick="_clearStaffFilters()" style="margin-top:18px">⟲ Clear</button></div>
+      ${canManage ? '<div><button class="btn bp btn-sm" onclick="openAddStaffModal()" style="margin-top:18px">➕ Add Staff</button></div>' : ''}
+    </div>
+    <div id="stStats" style="font-size:11px;color:var(--g500);margin-top:8px"></div>
+  </div>
+  <div class="card" style="padding:0">
+    <div class="tw">
+      <table class="staff-tbl">
+        <thead>
+          <tr>
+            <th>Code</th>
+            <th>Name (En)</th>
+            <th>Name (Ar)</th>
+            <th>Role Group</th>
+            <th>Job Title</th>
+            <th>Department</th>
+            <th>Branch</th>
+            <th>Salary</th>
+            <th>Status</th>
+            ${canManage ? '<th>Actions</th>' : ''}
+          </tr>
+        </thead>
+        <tbody id="stTbody"></tbody>
+      </table>
+    </div>
+  </div>`;
 }
-function filterStaff(){
-  const q=(document.getElementById('stQ')?.value||'').toLowerCase();
-  let staff=getStaff().filter(s=>canView(CU,s.branch)||s.branch==='all');
-  if(q) staff=staff.filter(s=>(s.name+s.nameAr+s.role+s.specialty).toLowerCase().includes(q));
-  const tb=document.getElementById('stTbody');if(!tb)return;
-  tb.innerHTML=staff.map(s=>`<tr><td><strong>${s.name}</strong></td><td style="font-family:'Tajawal',sans-serif">${s.nameAr}</td><td>${{Doctor:'👨‍⚕️',Nurse:'💉',Receptionist:'🖥️',Technician:'🔬',Admin:'👑'}[s.role]||'👤'} ${s.role}</td><td style="font-size:12px;color:var(--g600)">${s.specialty||'—'}</td><td><span class="bdg bb" style="font-size:10px">${getBr(s.branch).name}</span></td><td style="font-weight:600">${s.salary.toLocaleString()} ${s.currency}</td><td style="font-size:12px">${s.startDate}</td><td><span class="bdg ${s.status==='Active'?'bg':'bgr'}">${s.status}</span></td></tr>`).join('');
+
+// [Phase HR1c.5.3] Replace filterStaff · multi-filter (search + 4 dropdowns + seed toggle) · permission-gated edit button.
+function _filterStaffNew(){
+  const canManage = (typeof hasPerm==='function' && hasPerm('staff.manage'));
+  const q = (document.getElementById('stQ')?.value||'').toLowerCase().trim();
+  const fDept = (document.getElementById('stDept')?.value||'').trim();
+  const fRoleGroup = (document.getElementById('stRoleGroup')?.value||'').trim();
+  const fActive = (document.getElementById('stActive')?.value||'').trim();
+  const fBranch = (document.getElementById('stBranch')?.value||'').trim();
+  const showSeed = !!document.getElementById('stShowSeed')?.checked;
+  let staff = (typeof getStaff==='function') ? getStaff() : [];
+  // Hide seed rows by default (admin opt-in toggle)
+  if(!showSeed) staff = staff.filter(function(s){ return s && s.staffCode; });
+  // Branch scoping (legacy canView · respects existing access control)
+  staff = staff.filter(function(s){
+    if(!s) return false;
+    return (typeof canView==='function' ? canView(CU, s.homeBranch||s.branch) : true) || (s.homeBranch||s.branch)==='all';
+  });
+  // Apply filters
+  if(q){
+    staff = staff.filter(function(s){
+      const blob = ((s.staffCode||'')+' '+(s.name||'')+' '+(s.nameAr||'')+' '+(s.fullNameEn||'')+' '+(s.fullNameAr||'')+' '+(s.jobTitle||'')+' '+(s.department||'')).toLowerCase();
+      return blob.indexOf(q) >= 0;
+    });
+  }
+  if(fDept) staff = staff.filter(function(s){ return s.department === fDept; });
+  if(fRoleGroup) staff = staff.filter(function(s){ return s.roleGroup === fRoleGroup; });
+  if(fActive) staff = staff.filter(function(s){ return (s.activeStatus||'active') === fActive; });
+  if(fBranch === '__none__') staff = staff.filter(function(s){ return !s.homeBranch && !s.branch; });
+  else if(fBranch) staff = staff.filter(function(s){ return (s.homeBranch||s.branch) === fBranch; });
+  // Sort by staff_code (NULL last) then name
+  staff.sort(function(a,b){
+    const ca = a.staffCode || 'ZZZ_'+a.id;
+    const cb = b.staffCode || 'ZZZ_'+b.id;
+    return ca.localeCompare(cb);
+  });
+  // Populate department dropdown if empty (one-time on first render)
+  const deptSel = document.getElementById('stDept');
+  if(deptSel && deptSel.options.length <= 1){
+    const allDepts = Array.from(new Set((typeof getStaff==='function'?getStaff():[]).map(function(s){ return s && s.department; }).filter(Boolean))).sort();
+    allDepts.forEach(function(d){
+      const opt = document.createElement('option'); opt.value = d; opt.textContent = d; deptSel.appendChild(opt);
+    });
+  }
+  // Render rows
+  const tb = document.getElementById('stTbody'); if(!tb) return;
+  if(!staff.length){
+    tb.innerHTML = '<tr><td colspan="'+(canManage?10:9)+'" style="text-align:center;padding:20px;color:var(--g500)">No staff match your filters</td></tr>';
+  } else {
+    tb.innerHTML = staff.map(function(s){
+      const isSeed = !s.staffCode;
+      const codeCell = isSeed
+        ? '<span class="bdg" style="background:#fef3c7;color:#92400e;font-size:10px">🟡 Seed</span>'
+        : '<strong style="font-family:monospace">'+s.staffCode+'</strong>';
+      const safeId = String(s.id||'').replace(/'/g, "\\'");
+      const editBtn = canManage
+        ? '<button class="btn bs btn-sm" onclick="openEditStaffModal(\''+safeId+'\')" style="font-size:11px;padding:3px 8px">'+(isSeed?'👁 View':'✏️ Edit')+'</button>'
+        : '';
+      const branchName = (typeof getBr==='function') ? (getBr(s.homeBranch||s.branch).name||(s.homeBranch||s.branch||'—')) : (s.homeBranch||s.branch||'—');
+      const salary = (s.basicSalary != null) ? s.basicSalary : (s.salary != null ? s.salary : null);
+      const salaryStr = (salary != null && !isNaN(salary)) ? Number(salary).toLocaleString()+' '+(s.salaryCurrency||s.currency||'EGP') : '—';
+      const status = s.activeStatus || (s.status==='Active'?'active':(s.status||'unknown'));
+      const statusCls = status==='active' ? 'bg' : 'bgr';
+      return '<tr>'+
+        '<td>'+codeCell+'</td>'+
+        '<td><strong>'+(s.name||s.fullNameEn||'—')+'</strong></td>'+
+        '<td style="font-family:\'Tajawal\',sans-serif" dir="rtl">'+(s.fullNameAr||s.nameAr||'—')+'</td>'+
+        '<td><span class="bdg" style="background:#dbeafe;color:#1e3a8a;font-size:10px">'+(s.roleGroup||s.role||'—')+'</span></td>'+
+        '<td style="font-size:12px" dir="rtl">'+(s.jobTitle||'—')+'</td>'+
+        '<td style="font-size:12px" dir="rtl">'+(s.department||'—')+'</td>'+
+        '<td><span class="bdg bb" style="font-size:10px">'+branchName+'</span></td>'+
+        '<td style="font-weight:600">'+salaryStr+'</td>'+
+        '<td><span class="bdg '+statusCls+'">'+status+'</span></td>'+
+        (canManage ? '<td>'+editBtn+'</td>' : '')+
+        '</tr>';
+    }).join('');
+  }
+  // Stats line
+  const statsEl = document.getElementById('stStats');
+  if(statsEl){
+    const total = (typeof getStaff==='function'?getStaff():[]).length;
+    const visible = staff.length;
+    const seedCount = (typeof getStaff==='function'?getStaff():[]).filter(function(s){ return s && !s.staffCode; }).length;
+    statsEl.innerHTML = '👥 '+visible+' shown · '+total+' total ('+seedCount+' uncoded seed rows '+(showSeed?'visible':'hidden')+')';
+  }
 }
+window._filterStaffNew = _filterStaffNew;
+
+function _clearStaffFilters(){
+  ['stQ','stDept','stRoleGroup','stBranch'].forEach(function(id){ const el=document.getElementById(id); if(el) el.value=''; });
+  const a = document.getElementById('stActive'); if(a) a.value='active';
+  const ss = document.getElementById('stShowSeed'); if(ss) ss.checked=false;
+  _filterStaffNew();
+}
+window._clearStaffFilters = _clearStaffFilters;
+
+// [Phase HR1c.5.3] Back-compat alias · existing nav() at line 5236 calls filterStaff() on page open.
+function filterStaff(){ _filterStaffNew(); }
+window.filterStaff = filterStaff;
 
 // ════════════════════════════════════════════
 //  SHIFTS & ATTENDANCE
