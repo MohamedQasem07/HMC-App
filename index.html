@@ -6404,21 +6404,22 @@ function openApplyPatternModal(){
   if(lbl) lbl.textContent = branchName+' ('+branch+')';
   // Stash branch on modal for handlers
   m.dataset.branch = branch;
-  // Populate nurse multi-select (active nurses · home-branch matching OR cross-branch staff candidates)
-  const usersAll = (typeof getUsers==='function')?getUsers():[];
-  const nurses = usersAll.filter(function(u){ return u && u.role==='nurse' && u.active!==false; })
-    .sort(function(a,b){ return (a.name||a.username||a.id||'').localeCompare(b.name||b.username||b.id||''); });
+  // [Phase HR1c.5.5.2b] Populate nurse multi-select via getActiveNurses() · staff is HR truth · users is fallback for unlinked.
+  const allNurses = (typeof getActiveNurses==='function') ? getActiveNurses() : [];
+  const nurses = allNurses.slice()
+    .sort(function(a,b){ return (a.name||a.id||'').localeCompare(b.name||b.id||''); });
   const list = document.getElementById('ap_nurses');
   if(list){
     if(!nurses.length){
-      list.innerHTML = '<div style="color:var(--g500);padding:4px">No active nurses · use Users & Access page to add nurses</div>';
+      list.innerHTML = '<div style="color:var(--g500);padding:4px">No active nurses · add via Staff page</div>';
     } else {
       list.innerHTML = nurses.map(function(n){
         const branchNote = (n.branch && n.branch!=='all' && n.branch!==branch)
           ? ' <span style="font-size:10px;color:var(--g500)">(home: '+(getBr(n.branch).name||n.branch)+')</span>'
           : '';
-        const dispName = (n.name||n.username||n.id||'').replace(/"/g,'&quot;');
-        return '<label style="display:block;padding:3px 0"><input type="checkbox" class="ap-nurse-cb" data-uid="'+n.id+'" data-name="'+dispName+'" onchange="_applyPatternUpdatePreview()"> '+(n.name||n.username||n.id)+branchNote+'</label>';
+        const dispName = (n.name||n.id||'').replace(/"/g,'&quot;');
+        // [Phase HR1c.5.5.2b] Dual-key data attributes · D5 α always-both-keys (empty string when unknown)
+        return '<label style="display:block;padding:3px 0"><input type="checkbox" class="ap-nurse-cb" data-staff-id="'+(n.staffId||'')+'" data-user-id="'+(n.userId||'')+'" data-name="'+dispName+'" onchange="_applyPatternUpdatePreview()"> '+(n.name||n.id)+branchNote+'</label>';
       }).join('');
     }
   }
@@ -6531,7 +6532,12 @@ async function applyPatternExecute(){
   if(!shiftType){ if(typeof toast==='function') toast('Pick a shift type','err'); return; }
   if(!dowChecked.length){ if(typeof toast==='function') toast('Select at least one weekday','err'); return; }
   if(!staffCbs.length){ if(typeof toast==='function') toast('Select at least one nurse','err'); return; }
-  const staff = staffCbs.map(function(cb){ return { id:cb.dataset.uid, name:cb.dataset.name||cb.dataset.uid }; });
+  // [Phase HR1c.5.5.2b] Read dual-key data attrs · D5 α always-both-keys (null when unknown).
+  const staff = staffCbs.map(function(cb){
+    const sId = cb.dataset.staffId || null;
+    const uId = cb.dataset.userId || null;
+    return { staffId: sId, userId: uId, name: cb.dataset.name || (sId || uId) };
+  }).filter(function(p){ return p.staffId || p.userId; });
   // Enumerate dates
   const dates = _applyPatternEnumerateDates(fromStr, toStr, dowChecked);
   if(!dates.length){ if(typeof toast==='function') toast('No matching dates','err'); return; }
@@ -6550,9 +6556,10 @@ async function applyPatternExecute(){
     if(!shiftId) continue;
     createdShifts++;
     for(const p of staff){
-      // addShiftAssignment is silent · idempotent for already-assigned via removeShiftAssignment's check
+      // addShiftAssignment is silent · idempotent via dual-key match (hotfix-1)
       if(typeof addShiftAssignment==='function'){
-        const ok = await addShiftAssignment(shiftId, p.id, 'nurse', p.name, /*silent=*/true);
+        // [Phase HR1c.5.5.2b] Pass dual-key identity object · always-both-keys write contract.
+        const ok = await addShiftAssignment(shiftId, {staffId:p.staffId, userId:p.userId, name:p.name}, 'nurse', p.name, /*silent=*/true);
         if(ok) addedAssigns++;
       }
     }
@@ -6567,7 +6574,8 @@ async function applyPatternExecute(){
       for(const d of dates){
         if(seen.has(d)) continue;
         seen.add(d);
-        const conflicts = (typeof findShiftConflicts==='function') ? findShiftConflicts(p.id, d) : [];
+        // [Phase HR1c.5.5.2b] findShiftConflicts is userId-only (accepted known limit) · pass userId when available · skip silently for staff-only.
+        const conflicts = (typeof findShiftConflicts==='function' && p.userId) ? findShiftConflicts(p.userId, d) : [];
         if(conflicts && conflicts.length){
           flagged.push(p.name+' on '+d+' ×'+conflicts.length);
           break; // one flag per staff is enough · avoid spam
@@ -7797,9 +7805,8 @@ function _schedRenderCreateModal(){
   const staffDocs = (typeof getStaff==='function')?getStaff().filter(function(s){return s.role==='Doctor';}):[];
   const docNames = staffDocs.length ? staffDocs.map(function(d){return {id:d.id,name:d.name};}) : (typeof HMC_DOCTORS!=='undefined'?HMC_DOCTORS.map(function(n){return {id:n,name:n};}):[]);
   const docOpts = '<option value="">— None —</option>' + docNames.map(function(d){ return '<option value="'+d.id+'">'+d.name+'</option>'; }).join('');
-  // Nurse multi-select — fetch active nurses from users (HR1a · login-bearing identity)
-  const usersAll = (typeof getUsers==='function')?getUsers():[];
-  const nurses = usersAll.filter(function(u){ return u.role==='nurse' && u.active!==false; });
+  // [Phase HR1c.5.5.2b] Nurse multi-select via getActiveNurses() · staff is HR truth · users is fallback for unlinked.
+  const nurses = (typeof getActiveNurses==='function') ? getActiveNurses() : [];
   const today = new Date().toISOString().split('T')[0];
   // [Phase HR1c.2a] UI hotfix · use .modal/.mhdr/.mbody (existing CSS) instead of non-existent mbox/mhd/mbd-body classes
   return `
@@ -7840,8 +7847,9 @@ function _schedRenderCreateModal(){
           ${nurses.length ? nurses.map(function(n){
             const inBranch = (!CU || !CU.branch || CU.branch==='all') ? true : (n.branch===CU.branch);
             const branchNote = (n.branch && n.branch!=='all') ? ' <span style="font-size:10px;color:var(--g500)">('+(getBr(n.branch).name||n.branch)+')</span>' : '';
-            return '<label style="display:block;padding:3px 0"><input type="checkbox" class="cs-nurse-cb" data-uid="'+n.id+'" data-name="'+(n.name||'').replace(/"/g,'&quot;')+'"> '+(n.name||n.username||n.id)+branchNote+'</label>';
-          }).join('') : '<div style="font-size:12px;color:var(--g500);padding:4px">No active nurse users · use Users & Access page to add nurses</div>'}
+            // [Phase HR1c.5.5.2b] Dual-key data attributes · D5 α always-both-keys (empty string when unknown)
+            return '<label style="display:block;padding:3px 0"><input type="checkbox" class="cs-nurse-cb" data-staff-id="'+(n.staffId||'')+'" data-user-id="'+(n.userId||'')+'" data-name="'+(n.name||'').replace(/"/g,'&quot;')+'"> '+(n.name||n.id)+branchNote+'</label>';
+          }).join('') : '<div style="font-size:12px;color:var(--g500);padding:4px">No active nurses · add via Staff page</div>'}
           </div>
         </div>
         <div style="margin-bottom:10px">
@@ -8135,13 +8143,19 @@ async function saveShiftSchedule(){
   if(typeof saveShiftSchedules==='function') saveShiftSchedules(all);
   // Push to Supabase
   await _pushShiftSchedule(row);
-  // Collect checked nurse user_ids
+  // [Phase HR1c.5.5.2b] Collect checked nurses via dual-key data attrs · D5 α always-both-keys.
   const cbs = document.querySelectorAll('.cs-nurse-cb:checked');
-  const nurseList = Array.from(cbs).map(function(cb){ return {userId:cb.dataset.uid, staffName:cb.dataset.name}; });
-  // Add nurse assignments
+  const nurseList = Array.from(cbs).map(function(cb){
+    return {
+      staffId: cb.dataset.staffId || null,
+      userId: cb.dataset.userId || null,
+      staffName: cb.dataset.name
+    };
+  }).filter(function(n){ return n.staffId || n.userId; });
+  // Add nurse assignments via polymorphic identity object (hotfix-1 contract)
   let added = 0;
   for(const n of nurseList){
-    const ok = await addShiftAssignment(id, n.userId, 'nurse', n.staffName, /*silent=*/true);
+    const ok = await addShiftAssignment(id, {staffId:n.staffId, userId:n.userId, name:n.staffName}, 'nurse', n.staffName, /*silent=*/true);
     if(ok) added++;
   }
   // Add doctor assignment if doctor picked
@@ -8309,12 +8323,24 @@ function openAddStaffPicker(shiftId){
   const all = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
   const shift = all.find(function(s){ return s.id===shiftId; });
   if(!shift){ if(typeof toast==='function') toast('Shift not found','err'); return; }
-  // List nurses NOT yet assigned (or assigned but status='removed')
-  const usersAll = (typeof getUsers==='function')?getUsers():[];
-  const nurses = usersAll.filter(function(u){ return u.role==='nurse' && u.active!==false; });
+  // [Phase HR1c.5.5.2b] List nurses via getActiveNurses() · staff is HR truth · users is fallback for unlinked.
+  const nurses = (typeof getActiveNurses==='function') ? getActiveNurses() : [];
   const assigns = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
-  const activelyAssigned = new Set(assigns.filter(function(a){ return a.shiftId===shiftId && a.status!=='removed'; }).map(function(a){ return a.userId; }));
-  const available = nurses.filter(function(n){ return !activelyAssigned.has(n.id); });
+  // [Phase HR1c.5.5.2b] Dual-key already-assigned check · "exclude if ANY KEY MATCHES" semantics ·
+  // catches legacy userId-only rows + new staffId-only rows + both-key rows · prevents duplicate offers.
+  const activelyAssignedStaff = new Set(
+    assigns.filter(function(a){ return a.shiftId===shiftId && a.status!=='removed' && a.staffId; })
+           .map(function(a){ return a.staffId; })
+  );
+  const activelyAssignedUser = new Set(
+    assigns.filter(function(a){ return a.shiftId===shiftId && a.status!=='removed' && a.userId; })
+           .map(function(a){ return a.userId; })
+  );
+  const available = nurses.filter(function(n){
+    if(n.staffId && activelyAssignedStaff.has(n.staffId)) return false;
+    if(n.userId && activelyAssignedUser.has(n.userId)) return false;
+    return true;
+  });
   titleEl.innerHTML = 'Add Staff to: '+(shift.shiftType||'shift')+' · '+(getBr(shift.branch).name||shift.branch)+' · '+shift.date;
   if(!available.length){
     bodyEl.innerHTML = '<div style="text-align:center;padding:20px;color:var(--g500)">All active nurses already assigned · or no nurses available</div>'+
@@ -8323,10 +8349,13 @@ function openAddStaffPicker(shiftId){
     bodyEl.innerHTML = '<div style="max-height:340px;overflow:auto">'+
       available.map(function(n){
         const branchNote = (n.branch && n.branch!=='all') ? ' <span style="font-size:10px;color:var(--g500)">('+(getBr(n.branch).name||n.branch)+')</span>' : '';
-        const safeName = (n.name||n.username||n.id).replace(/'/g,"\\'");
+        const safeName = (n.name||n.id||'').replace(/'/g,"\\'");
+        // [Phase HR1c.5.5.2b] Inline onclick stashes dual-key into helper · helper builds polymorphic identity object.
+        const safeStaffId = String(n.staffId||'').replace(/'/g,"\\'");
+        const safeUserId  = String(n.userId||'').replace(/'/g,"\\'");
         return '<div style="display:flex;justify-content:space-between;align-items:center;padding:6px 0;border-bottom:1px solid var(--g100)">'+
-          '<span>• '+(n.name||n.username||n.id)+branchNote+'</span>'+
-          '<button class="btn bp btn-sm" onclick="addShiftAssignment(\''+shiftId+'\',\''+n.id+'\',\'nurse\',\''+safeName+'\').then(function(ok){ if(ok){ closeAddStaffPicker(); _schedFilterChange(); } })" style="font-size:11px;padding:3px 10px">+ Add</button>'+
+          '<span>• '+(n.name||n.id||'')+branchNote+'</span>'+
+          '<button class="btn bp btn-sm" onclick="_addStaffPickerInvoke(\''+shiftId+'\',\''+safeStaffId+'\',\''+safeUserId+'\',\''+safeName+'\')" style="font-size:11px;padding:3px 10px">+ Add</button>'+
           '</div>';
       }).join('')+'</div>'+
       '<div style="text-align:right;margin-top:10px"><button class="btn bs" onclick="closeAddStaffPicker()">Cancel</button></div>';
@@ -8337,8 +8366,23 @@ function closeAddStaffPicker(){
   const m = document.getElementById('addStaffModal');
   if(m) m.classList.remove('open');
 }
+// [Phase HR1c.5.5.2b] Helper · unwraps dual-key + dispatches polymorphic addShiftAssignment from inline onclick.
+// Avoids embedding a complex object literal into the picker's onclick string (quote-escape hell).
+async function _addStaffPickerInvoke(shiftId, staffId, userId, name){
+  if(!shiftId) return;
+  const sId = staffId || null;
+  const uId = userId || null;
+  if(!sId && !uId) return;
+  if(typeof addShiftAssignment !== 'function') return;
+  const ok = await addShiftAssignment(shiftId, {staffId:sId, userId:uId, name:name}, 'nurse', name);
+  if(ok){
+    if(typeof closeAddStaffPicker==='function') closeAddStaffPicker();
+    if(typeof _schedFilterChange==='function') _schedFilterChange();
+  }
+}
 window.openAddStaffPicker = openAddStaffPicker;
 window.closeAddStaffPicker = closeAddStaffPicker;
+window._addStaffPickerInvoke = _addStaffPickerInvoke;
 window.renderSchedulesPage = renderSchedulesPage;
 window.renderShiftCard = renderShiftCard;
 window.renderShiftAssignmentsList = renderShiftAssignmentsList;
