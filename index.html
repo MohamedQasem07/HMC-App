@@ -12093,6 +12093,13 @@ function renderStaff(){
   .staff-row input.fsi, .staff-row select.fsi, .staff-row textarea.fsi { width:100%; box-sizing:border-box; }
   .staff-tbl th, .staff-tbl td { padding:6px 8px; font-size:12px; }
   .staff-tbl th { background:var(--g100); font-size:11px; text-transform:uppercase; color:var(--g600); position:sticky; top:0; z-index:1; }
+  /* [Phase HR1c.5.3a] Vertical-center cell content · consistent 38px row height · inline-flex badges + buttons · RTL right-align */
+  .staff-tbl td, .staff-tbl th { vertical-align: middle; }
+  .staff-tbl tbody tr { height: 38px; }
+  .staff-tbl td > * { vertical-align: middle; }
+  .staff-tbl td .bdg { display: inline-flex; align-items: center; line-height: 1.2; }
+  .staff-tbl td .btn { vertical-align: middle; }
+  .staff-tbl td[dir="rtl"] { text-align: right; }
   @media (max-width:680px) {
     .staff-row { grid-template-columns:1fr; }
   }
