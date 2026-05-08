@@ -6710,8 +6710,9 @@ function _plannerShiftsForCell(staffId, dateISO, allShifts, allAssigns){
   const hasAll = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
   const ownBranchOnly = (typeof hasPerm==='function' && !hasAll && hasPerm('hr.shifts.schedule.ownBranch') && CU && CU.branch && CU.branch!=='all') ? CU.branch : null;
   // [Phase HR1c.5.5.1] Polymorphic entity dispatch · planner is nurses-only · doctor path EXCLUDED.
+  // [Phase HR1c.5.5.2a-hotfix-2] String input matches BOTH keyspaces · row.id can be staffId or userId.
   const probe = (typeof staffId === 'string')
-    ? { staffId: null, userId: staffId }
+    ? { staffId: staffId, userId: staffId }
     : { staffId: (staffId && staffId.staffId) || null, userId: (staffId && staffId.userId) || null };
   const myShiftIds = new Set(
     (allAssigns||[])
@@ -6749,8 +6750,9 @@ function _plannerShiftsByStartDate(staffId, dateISO, allShifts, allAssigns){
   const hasAll = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
   const ownBranchOnly = (typeof hasPerm==='function' && !hasAll && hasPerm('hr.shifts.schedule.ownBranch') && CU && CU.branch && CU.branch!=='all') ? CU.branch : null;
   // [Phase HR1c.5.5.1] Polymorphic entity dispatch · planner start-date variant · nurses-only.
+  // [Phase HR1c.5.5.2a-hotfix-2] String input matches BOTH keyspaces · symmetric with _plannerShiftsForCell.
   const probe = (typeof staffId === 'string')
-    ? { staffId: null, userId: staffId }
+    ? { staffId: staffId, userId: staffId }
     : { staffId: (staffId && staffId.staffId) || null, userId: (staffId && staffId.userId) || null };
   const myShiftIds = new Set(
     (allAssigns||[])
@@ -6829,7 +6831,8 @@ function _plannerBuildHTML(monthYM){
   const tbody = '<tbody>'+staff.map(function(p){
     const cells = days.map(function(d){
       // [Phase HR1c.4b.1c.1] Use start-date helper · prevents consecutive-night double-display.
-      const shifts = _plannerShiftsByStartDate(p.id, d.date, allShifts, allAssigns);
+      // [Phase HR1c.5.5.2a-hotfix-2] Pass dual-key identity object · matches assignments by staffId OR userId.
+      const shifts = _plannerShiftsByStartDate({staffId: p.staffId, userId: p.userId}, d.date, allShifts, allAssigns);
       let hasConflict = shifts.length > 1;
       if(!hasConflict && typeof findShiftConflicts==='function'){
         try { hasConflict = (findShiftConflicts(p.id, d.date) || []).length > 0; } catch(e){}
