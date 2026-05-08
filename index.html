@@ -3915,6 +3915,131 @@ window.getMyUpcomingShifts = getMyUpcomingShifts;
 window.findShiftConflicts = findShiftConflicts;
 
 // ═══════════════════════════════════════════════════════════════════════════
+// [Phase HR1d.1a] SHIFT GATE FOUNDATION — nurse access enforcement helpers
+// ═══════════════════════════════════════════════════════════════════════════
+// Narrow scope:
+//   • D1 _localTodayISO()          — local-time YYYY-MM-DD (no UTC midnight drift)
+//   • B4 _HR1D1_ALLOWED_WHEN_BLOCKED — Set of pages reachable while shift-blocked
+//   • B1 getMyActiveShiftToday()   — today's shift for current user (overnight-aware)
+//   • B2 getActiveBranch()         — defined but UNUSED in HR1d.1a (consumed in HR1d.1c)
+//   • B3 requireActiveShift()      — single source-of-truth for the access gate
+// HR1d.1b will harden End Shift with GPS clock-out · HR1d.1c will consume B2 in saveCase.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// [Phase HR1d.1a] D1 · local-time YYYY-MM-DD · safe for night shifts in Egypt timezone (UTC+2/+3).
+// new Date().toISOString().split('T')[0] is UTC-based and rolls over at 02:00-03:00 local,
+// causing late-night logins to see the wrong "today". This helper uses local time.
+function _localTodayISO(){
+  const d = new Date();
+  const y = d.getFullYear();
+  const m = String(d.getMonth() + 1).padStart(2, '0');
+  const dd = String(d.getDate()).padStart(2, '0');
+  return y + '-' + m + '-' + dd;
+}
+window._localTodayISO = _localTodayISO;
+
+// [Phase HR1d.1a] B4 · Pages reachable while shift-blocked · everything else re-routes to 'shifts'.
+const _HR1D1_ALLOWED_WHEN_BLOCKED = new Set(['shifts']);
+window._HR1D1_ALLOWED_WHEN_BLOCKED = _HR1D1_ALLOWED_WHEN_BLOCKED;
+
+// [Phase HR1d.1a] B1 · Resolve the current user's shift entry for today, with overnight roll-back.
+// Polymorphic identity contract (matches HR1c.5.5.2a-hotfix idiom):
+//   - input string         → legacy userId
+//   - input {staffId,userId} → dual-key
+//   - input omitted        → defaults from CU
+// Returns {shift, assignment, branch} or null.
+function getMyActiveShiftToday(userIdOrIdentity){
+  // Default identity from CU when omitted
+  let staffId = null, userId = null;
+  if(typeof userIdOrIdentity === 'undefined' || userIdOrIdentity === null){
+    if(typeof CU === 'undefined' || !CU) return null;
+    userId = CU.id;
+    staffId = (CU.staffId) || (typeof _resolveStaffIdForUser === 'function' ? _resolveStaffIdForUser(CU.id) : null);
+  } else if(typeof userIdOrIdentity === 'string'){
+    userId = userIdOrIdentity;
+    staffId = (typeof _resolveStaffIdForUser === 'function') ? _resolveStaffIdForUser(userId) : null;
+  } else {
+    staffId = userIdOrIdentity.staffId || null;
+    userId = userIdOrIdentity.userId || null;
+  }
+  if(!staffId && !userId) return null;
+  const today = _localTodayISO();
+  const yesterday = (typeof _addDaysISO === 'function') ? _addDaysISO(today, -1) : today;
+  const allShifts = (typeof _dedupeById === 'function')
+    ? _dedupeById((typeof getShiftSchedules === 'function') ? getShiftSchedules() : [])
+    : ((typeof getShiftSchedules === 'function') ? getShiftSchedules() : []);
+  const allAssigns = (typeof _dedupeById === 'function')
+    ? _dedupeById((typeof getShiftAssignments === 'function') ? getShiftAssignments() : [])
+    : ((typeof getShiftAssignments === 'function') ? getShiftAssignments() : []);
+  // Filter assignments matching dual-key + active + nurse role
+  const myAssigns = allAssigns.filter(function(a){
+    if(!a || a.status === 'removed' || a.role !== 'nurse') return false;
+    return (staffId && a.staffId === staffId) || (userId && a.userId === userId);
+  });
+  if(!myAssigns.length) return null;
+  const myShiftIds = new Set(myAssigns.map(function(a){ return a.shiftId; }));
+  // Walk shifts: today, OR yesterday with overnight/24h flag
+  for(const s of allShifts){
+    if(!s || s.status === 'cancelled') continue;
+    if(!myShiftIds.has(s.id)) continue;
+    if(s.date === today){
+      const a = myAssigns.find(function(a){ return a.shiftId === s.id; });
+      return { shift: s, assignment: a || null, branch: s.branch };
+    }
+    if(s.date === yesterday){
+      const isOvernight = (typeof _shiftIsOvernight === 'function') && _shiftIsOvernight(s);
+      const is24h = (typeof _shiftIs24h === 'function') && _shiftIs24h(s);
+      if(isOvernight || is24h){
+        const a = myAssigns.find(function(a){ return a.shiftId === s.id; });
+        return { shift: s, assignment: a || null, branch: s.branch };
+      }
+    }
+  }
+  return null;
+}
+window.getMyActiveShiftToday = getMyActiveShiftToday;
+
+// [Phase HR1d.1a] B2 · Branch resolution helper · DEFINED BUT UNUSED in HR1d.1a.
+// Reserved for HR1d.1c consumption in saveCase / treasury / invoice.
+// Returns shift.branch when nurse is on an active shift today · CU.branch otherwise (admin/reception/etc).
+function getActiveBranch(){
+  if(typeof CU === 'undefined' || !CU) return null;
+  if(CU.role !== 'nurse') return CU.branch; // admin/reception/manager/etc bypass shifts
+  const active = getMyActiveShiftToday();
+  if(active && active.branch) return active.branch;
+  return CU.branch;
+}
+window.getActiveBranch = getActiveBranch;
+
+// [Phase HR1d.1a] B3 · Enforcement gate · single source-of-truth for access decisions.
+// Returns rich state object: {ok, state, shift?, wd?, branch?, reason?}.
+// 6 outcomes: NOT_LOGGED_IN, NOT_GATED (admin/etc), OK, BLOCKED_NO_SHIFT, BLOCKED_NEEDS_START,
+// BLOCKED_PENDING, BLOCKED_REJECTED, BLOCKED_ENDED.
+function requireActiveShift(){
+  if(typeof CU === 'undefined' || !CU) return { ok: false, state: 'NOT_LOGGED_IN' };
+  if(CU.role !== 'nurse') return { ok: true, state: 'NOT_GATED' };
+  const shift = getMyActiveShiftToday();
+  if(!shift){
+    return { ok: false, state: 'BLOCKED_NO_SHIFT', shift: null, wd: null, reason: 'No Shift Assigned · contact admin' };
+  }
+  const wd = (typeof getTodayWorkday === 'function') ? getTodayWorkday() : null;
+  if(!wd || !wd.clockInExplicitAt){
+    return { ok: false, state: 'BLOCKED_NEEDS_START', shift: shift, wd: wd, reason: 'Tap Clock In Now to start your shift' };
+  }
+  if(wd.checkedOutAt){
+    return { ok: false, state: 'BLOCKED_ENDED', shift: shift, wd: wd, reason: 'Day Ended · contact admin for emergency coverage' };
+  }
+  if(wd.clockInApprovalStatus === 'pending'){
+    return { ok: false, state: 'BLOCKED_PENDING', shift: shift, wd: wd, reason: 'Pending admin approval' };
+  }
+  if(wd.clockInApprovalStatus === 'rejected'){
+    return { ok: false, state: 'BLOCKED_REJECTED', shift: shift, wd: wd, reason: 'Rejected · contact admin' };
+  }
+  return { ok: true, state: 'OK', shift: shift, wd: wd, branch: shift.branch };
+}
+window.requireActiveShift = requireActiveShift;
+
+// ═══════════════════════════════════════════════════════════════════════════
 // SESSION #5 — WORKDAY MODEL (replaces the old Shift session concept)
 // ═══════════════════════════════════════════════════════════════════════════
 // Goals captured:
@@ -3938,7 +4063,8 @@ function isWorkdayTrackedUser(){
   if(typeof CU==='undefined' || !CU) return false;
   if(CU.role !== 'nurse') return false;            // admin / reception / manager → no workday
   if(!CU.branch || CU.branch==='all') return false; // no clinic assignment → no workday
-  if(BIOMETRIC_BRANCHES.has(CU.branch)) return false; // main branches → biometric, not digital
+  // [Phase HR1d.1a] Q2 · biometric branches Kawther/Sheraton ALSO require digital Start Shift in app.
+  // Biometric stays for payroll · BIOMETRIC_BRANCHES const kept for future payroll integration · this gate no longer reads it.
   return true;
 }
 window.isWorkdayTrackedUser = isWorkdayTrackedUser;
@@ -3965,7 +4091,10 @@ function workdayId(userId, dateISO){ return 'WD-'+(userId||'unknown')+'-'+(dateI
 // This is the single source of truth for "is the nurse clocked in today?"
 function getTodayWorkday(){
   if(typeof CU==='undefined' || !CU) return null;
-  const today = new Date().toISOString().split('T')[0];
+  // [Phase HR1d.1a] M2.b · use local-time today · MUST match ensureTodayWorkday's date source.
+  // Otherwise after midnight UTC but before midnight local, the gate creates wd with one date
+  // and reads back with another · breaking the access state machine.
+  const today = (typeof _localTodayISO === 'function') ? _localTodayISO() : new Date().toISOString().split('T')[0];
   const id = workdayId(CU.id, today);
   const wds = getWorkdays();
   return wds.find(function(w){
@@ -3978,10 +4107,11 @@ function getTodayWorkday(){
 function ensureTodayWorkday(){
   if(typeof CU==='undefined' || !CU) return null;
   // [Session #6 fix] Gate: workday tracked only for outside-clinic nurses.
-  // Admin/reception/Kawther/Sheraton use biometric or access log instead.
+  // [Phase HR1d.1a] Q2 · biometric branches now also tracked · isWorkdayTrackedUser updated.
   if(!isWorkdayTrackedUser()) return null;
   const now = new Date();
-  const today = now.toISOString().split('T')[0];
+  // [Phase HR1d.1a] M2.b · use local-time today to avoid UTC midnight drift in Egypt timezone (UTC+2/+3).
+  const today = (typeof _localTodayISO === 'function') ? _localTodayISO() : now.toISOString().split('T')[0];
   const nowISO = now.toISOString();
   const wds = getWorkdays();
   const id = workdayId(CU.id, today);
@@ -4006,20 +4136,14 @@ function ensureTodayWorkday(){
     wds.push(wd);
     saveWorkdays(wds);
   } else {
-    // [Session #6 BUGFIX] If today's workday was checked out (logout / End My Day)
-    // and the nurse is back in the system, reopen it. The workday model is meant to
-    // be continuous within a calendar day — logout doesn't end the workday, just the
-    // browser session. This prevents "No active shift" appearing for the rest of the day.
-    if(wd.checkedOutAt){
-      wd.checkedOutAt = null;
-      wd.lastActivity = nowISO;
-      saveWorkdays(wds);
-      try { toast('Workday resumed','ok'); } catch(e){}
-    } else {
-      // Bump lastActivity (workday already active)
+    // [Phase HR1d.1a] Q3 · NO auto-reopen of checked-out workday.
+    // After End Shift, access remains BLOCKED for the rest of the day · Extra Shift / Emergency
+    // Coverage will be a future opt-in flow. Bump lastActivity only when still active.
+    if(!wd.checkedOutAt){
       wd.lastActivity = nowISO;
       saveWorkdays(wds);
     }
+    // (intentionally no else branch — checked-out workday stays checked out)
   }
   return wd;
 }
@@ -5174,7 +5298,14 @@ function showApp(){
   try { ensureTodayWorkday(); } catch(e){ console.warn('Workday init:', e); }
   // [Session #6] Audit log: every login (all roles) — so admin actions are traceable.
   try { if(typeof logAccess==='function') logAccess('login', CU?.id||'', CU?.branch||''); } catch(e){}
-  nav('dashboard');
+  // [Phase HR1d.1a] M4 · route nurses through the gate · blocked nurses land on Attendance, not dashboard.
+  // Non-nurse roles continue to land on dashboard (gate.ok=true for admin/reception/etc).
+  if(CU && CU.role === 'nurse' && typeof requireActiveShift === 'function'){
+    const _gate = requireActiveShift();
+    nav(_gate.ok ? 'dashboard' : 'shifts');
+  } else {
+    nav('dashboard');
+  }
 }
 
 // [Session #5 WORKDAY cleanup] Removed showMandatoryShiftStart — replaced by
@@ -5297,6 +5428,16 @@ function buildSB(){
 const PT={dashboard:{en:'Dashboard',ar:'لوحة التحكم'},cases:{en:'Patient Cases',ar:'حالات المرضى'},insurance:{en:'Insurance Management',ar:'إدارة التأمين'},insCos:{en:'Insurance Companies',ar:'شركات التأمين'},finance:{en:'Finance & Billing',ar:'المالية'},staff:{en:'Staff & HR',ar:'الموظفون'},shifts:{en:'Attendance & Work Log',ar:'سجل الحضور والعمل'},schedules:{en:'Shift Scheduling',ar:'جدولة المناوبات'},reports:{en:'Reports',ar:'التقارير'},treasury:{en:'Treasury & Cash',ar:'الخزينة'},settings:{en:'Settings',ar:'الإعدادات'},assets:{en:'Asset Register',ar:'جرد الأصول'},visaMachines:{en:'Visa Machines',ar:'ماكينات الفيزا'},catalog:{en:'Price Catalog',ar:'كتالوج الأسعار'},banks:{en:'Banks & Transfer Accounts',ar:'البنوك وحسابات التحويل'}};
 function nav(pg){
   PAGE=pg;
+  // [Phase HR1d.1a] M3 · nurse shift enforcement gate · runs BEFORE any page render.
+  // Allowed while blocked: 'shifts' only · admin/reception/etc bypass (gate.ok=true for non-nurses).
+  if(typeof requireActiveShift === 'function'){
+    const _gate = requireActiveShift();
+    if(!_gate.ok && typeof _HR1D1_ALLOWED_WHEN_BLOCKED !== 'undefined' && !_HR1D1_ALLOWED_WHEN_BLOCKED.has(pg)){
+      pg = 'shifts';
+      PAGE = 'shifts';
+      if(typeof toast === 'function') toast(_gate.reason || 'Active shift required to access this page', 'warn');
+    }
+  }
   document.querySelectorAll('.ni').forEach(e=>e.classList.remove('active'));
   document.getElementById('ni-'+pg)?.classList.add('active');
   const t=PT[pg]||{en:pg,ar:pg};
@@ -9019,6 +9160,17 @@ function renderClinicDash(){
     const wd = getTodayWorkday();
     // [Phase HR1b.2] Inline button styles — B1 decision (no global CSS change).
     const clockInBtnHTML = '<button class="sbtn" onclick="clockInNow()" style="background:#10b981;color:#fff;font-weight:700;border:none">📍 Clock In Now</button>';
+    // [Phase HR1d.1a] M7 · BLOCKED_NO_SHIFT early-return · no Clock In button (would be useless without a roster entry).
+    if(typeof requireActiveShift === 'function'){
+      const _gate = requireActiveShift();
+      if(!_gate.ok && _gate.state === 'BLOCKED_NO_SHIFT'){
+        return '<div class="sb-banner" style="background:linear-gradient(135deg,#7f1d1d,#991b1b)">'+
+          '<div>'+
+            '<div class="sb-st">🚫 No Shift Assigned</div>'+
+            '<div class="sb-ss">You have no roster entry for today · contact your supervisor to be added to the planner.</div>'+
+          '</div></div>';
+      }
+    }
     if(!wd){
       // Edge case: user somehow landed here without a workday row. Show explicit Clock In button.
       return '<div class="sb-banner"><div>'+
@@ -9056,7 +9208,8 @@ function renderClinicDash(){
     if(checkedOut){
       topLine = '⏹ Day Ended';
     } else if(!hasExplicit){
-      topLine = '🟡 '+branchName+' · auto-checkin · please confirm with Clock In';
+      // [Phase HR1d.1a] M7 · NEEDS_START label tweak · clearly tells nurse Clock In is mandatory before app access.
+      topLine = '🚧 '+branchName+' · Start Shift Required · tap Clock In Now';
     } else if(isRejected){
       topLine = '🔴 '+branchName+' · Rejected · contact admin';
     } else if(inRadius){
@@ -9570,10 +9723,19 @@ function printSimpleInvoice(caseId){
 }
 
 function checkShiftThenCase(){
-  // [Session #5 WORKDAY] No more "start shift first" gate. Just ensure today's
-  // workday row exists (idempotent) and open the case modal.
+  // [Phase HR1d.1a] M5 · defense-in-depth gate at New Case button entry point.
+  // M3's nav() gate already blocks the cases page · this is the inner safety net for any
+  // direct invocation paths that bypass nav (shortcut keys, admin tools, etc).
   if(CU.role==='nurse'){
     try { ensureTodayWorkday(); } catch(e){}
+    if(typeof requireActiveShift === 'function'){
+      const _gate = requireActiveShift();
+      if(!_gate.ok){
+        if(typeof toast === 'function') toast(_gate.reason || 'Active shift required to create cases', 'warn');
+        if(typeof nav === 'function') nav('shifts');
+        return;
+      }
+    }
   }
   openCaseModal();
 }
