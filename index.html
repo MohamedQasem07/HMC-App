@@ -2821,6 +2821,8 @@ function toSnake(obj, table) {
     // [Phase HR1c.5.3] Staff Master forward field mappings (camelCase → snake_case)
     staffCode:'staff_code', roleGroup:'role_group', activeStatus:'active_status',
     canLogin:'can_login', linkedUserId:'linked_user_id',
+    // [Phase HR1c.5.4] Bridge mappings for HR1c.5.1 shadow columns · supports dual-write of staff_id / doctor_staff_id
+    staffId:'staff_id', doctorStaffId:'doctor_staff_id',
     fullNameEn:'full_name_en', fullNameAr:'full_name_ar',
     jobTitle:'job_title', homeBranch:'home_branch',
     employmentType:'employment_type', payType:'pay_type',
@@ -2890,7 +2892,8 @@ function toSnake(obj, table) {
       'first_login','last_activity','checked_out_at','case_count','created_at',
       'clock_in_lat','clock_in_lng','clock_in_accuracy_m','clock_in_in_radius','clock_in_reason',
       'clock_in_device_info','clock_in_approval_status','clock_in_approved_by','clock_in_approved_at','clock_in_explicit_at',
-      'clock_out_lat','clock_out_lng','clock_out_accuracy_m','clock_out_in_radius','clock_out_reason']),
+      'clock_out_lat','clock_out_lng','clock_out_accuracy_m','clock_out_in_radius','clock_out_reason',
+      'staff_id']),  // [Phase HR1c.5.4] HR1c.5.1 shadow column · supports dual-write
     // [Session #6] Access log — who did what, when. Admin/reception/main-branch audit trail.
     access_log: new Set(['id','user_id','user_name','role','branch','action','target_id',
       'details','timestamp','user_agent']),
@@ -2905,14 +2908,17 @@ function toSnake(obj, table) {
     branch_geofence: new Set(['id','branch_id','lat','lng','radius_m','address','active','notes',
       'created_by','created_at','updated_at']),
     // [Phase HR1c.1] Shift schedules — admin/hr_manager/head_nurse plan rosters per branch+date+type
+    // [Phase HR1c.5.4] +doctor_staff_id shadow column for dual-write
     shift_schedules: new Set(['id','branch','date','shift_type','start_time','end_time',
-      'doctor_user_id','status','notes','created_by','created_at','updated_at']),
+      'doctor_user_id','doctor_staff_id','status','notes','created_by','created_at','updated_at']),
     // [Phase HR1c.1] Shift assignments — per-staff rows linked to shift_schedules · soft-delete via status='removed'
-    shift_assignments: new Set(['id','shift_id','user_id','staff_name','role','status',
+    // [Phase HR1c.5.4] +staff_id shadow column for dual-write
+    shift_assignments: new Set(['id','shift_id','user_id','staff_id','staff_name','role','status',
       'assigned_by','assigned_at','notes']),
     // [Phase HR1c.4b.1a] Monthly roster membership — explicit "show this nurse on this branch/month roster" rows
     // Stable id `MRS-{branch}-{YYYYMM}-{user_id_hash}` · DB-level CHECK enforces role='nurse' (HR1c.4a.1) · soft-delete via status='removed'
-    monthly_roster_staff: new Set(['id','branch','month_ym','user_id','role','status',
+    // [Phase HR1c.5.4] +staff_id shadow column for dual-write
+    monthly_roster_staff: new Set(['id','branch','month_ym','user_id','staff_id','role','status',
       'created_by','created_at','updated_at']),
     // [Phase HR1c.5.3] Staff Master whitelist — 36 columns post-HR1c.5.1 + HR1c.5.2 Part A
     // Includes legacy fields (name/name_ar/role/specialty/branch/salary/currency/start_date/status/created_at/facility)
@@ -3013,6 +3019,8 @@ function parseSnakeCase(obj) {
     // [Phase HR1c.5.3] Staff Master reverse field mappings (snake_case → camelCase)
     staff_code:'staffCode', role_group:'roleGroup', active_status:'activeStatus',
     can_login:'canLogin', linked_user_id:'linkedUserId',
+    // [Phase HR1c.5.4] Bridge reverse mappings for HR1c.5.1 shadow columns
+    staff_id:'staffId', doctor_staff_id:'doctorStaffId',
     full_name_en:'fullNameEn', full_name_ar:'fullNameAr',
     job_title:'jobTitle', home_branch:'homeBranch',
     employment_type:'employmentType', pay_type:'payType',
@@ -3955,6 +3963,7 @@ function ensureTodayWorkday(){
     wd = {
       id: id,
       userId: CU.id,
+      staffId: (typeof _resolveStaffIdForUser==='function') ? _resolveStaffIdForUser(CU.id) : null, // [Phase HR1c.5.4] dual-write · null today (no users have staff_id yet)
       staffName: CU.name,
       role: CU.role,
       branch: CU.branch==='all' ? '' : CU.branch,
@@ -5279,6 +5288,8 @@ function nav(pg){
   if(pg==='shifts'){/* renderShifts() inside pages[pg]() handles everything */}
   if(pg==='schedules'){setTimeout(function(){ /* [Phase HR1c.4a + HR1c.4b.1b] honor saved view mode (day/monthBranch/monthNurse) · _setSchedView triggers the right filter change internally · first-time users default to monthNurse */ if(typeof _setSchedView==='function'){ const _m = (typeof _getSchedView==='function')?_getSchedView():'day'; _setSchedView(_m); } else if(typeof _schedFilterChange==='function') _schedFilterChange(); },50);}
   if(pg==='staff'){filterStaff();}
+  // [Phase HR1c.5.4] Auto-refresh Data Hygiene counts when Settings opens · NO inline <script> per Operating Rule #11.
+  if(pg==='settings' && typeof _refreshDataHygiene==='function'){ setTimeout(_refreshDataHygiene, 50); }
   if(pg==='reports'){setTimeout(()=>{CURRENT_RPT='daily';refreshReport();},50);}
   if(pg==='assets'){setTimeout(()=>filterAssets(),50);}
   if(pg==='visaMachines'){/* rendered inline — no init needed */}
@@ -5519,6 +5530,193 @@ async function _pushStaff(row){
   catch(e){ console.warn('_pushStaff:',e); return null; }
 }
 window._pushStaff = _pushStaff;
+
+// ════════════════════════════════════════════════════════════════════
+// [Phase HR1c.5.4] Frontend dual-read helpers · Staff as HR source-of-truth
+// ════════════════════════════════════════════════════════════════════
+// Helpers UNION staff (preferred · linked when possible) + users (back-compat fallback).
+// NO READER MIGRATION in this phase — existing operational readers stay on their current source.
+// Shapes: { id, staffId, userId, staffCode, name, nameAr, jobTitle, roleGroup, branch, active, source, linked }
+//   - source can be 'staff' / 'user' / 'legacy' (HMC_DOCTORS fallback, getActiveDoctors only)
+//   - staffId/userId null when unknown — never faked
+// Linkage rules: when STAFF_AS_HR_SOURCE_PREFER_LINKED is true and staff.linkedUserId points to a user,
+// the merged record gets source='staff' linked=true with both staffId+userId populated.
+// Today's reality: 0 of 13 users have staff_id, 0 of 72 staff have linked_user_id → all records unlinked.
+
+const STAFF_AS_HR_SOURCE_ENABLED = true;        // [Phase HR1c.5.4] Master kill-switch · false = users-only legacy
+const STAFF_AS_HR_SOURCE_PREFER_LINKED = true;  // [Phase HR1c.5.4] When both sides known, merge into staff record
+window.STAFF_AS_HR_SOURCE_ENABLED = STAFF_AS_HR_SOURCE_ENABLED;
+window.STAFF_AS_HR_SOURCE_PREFER_LINKED = STAFF_AS_HR_SOURCE_PREFER_LINKED;
+
+// [Phase HR1c.5.4] Internal: canonical record from a staff row (linkedUser optional · merged when linked).
+function _hr154RecordFromStaff(s, linkedUser){
+  return {
+    id: s.id,
+    staffId: s.id,
+    userId: linkedUser ? linkedUser.id : null,
+    staffCode: s.staffCode || null,
+    name: s.name || (linkedUser && linkedUser.name) || s.fullNameEn || s.fullNameAr || s.id,
+    nameAr: s.fullNameAr || s.nameAr || (linkedUser && linkedUser.nameAr) || null,
+    jobTitle: s.jobTitle || null,
+    roleGroup: s.roleGroup || null,
+    branch: s.homeBranch || s.branch || (linkedUser && linkedUser.branch) || null,
+    active: (s.activeStatus === 'active'),
+    source: 'staff',
+    linked: !!linkedUser
+  };
+}
+
+// [Phase HR1c.5.4] Internal: canonical record from a users row (no staff linkage).
+function _hr154RecordFromUser(u){
+  return {
+    id: u.id,
+    staffId: null,
+    userId: u.id,
+    staffCode: null,
+    name: u.name || u.username || u.id,
+    nameAr: u.nameAr || null,
+    jobTitle: null,
+    roleGroup: u.role || null,
+    branch: u.branch || null,
+    active: (u.active !== false),
+    source: 'user',
+    linked: false
+  };
+}
+
+// [Phase HR1c.5.4] Internal: shared union-and-dedup logic for nurses/doctors/drivers.
+function _hr154CollectActive(staffPredicate, userPredicate, branchFilter){
+  const usersAll = (typeof getUsers==='function') ? getUsers() : [];
+  if(!STAFF_AS_HR_SOURCE_ENABLED){
+    // Kill-switch: legacy users-only mode
+    return usersAll.filter(userPredicate).map(_hr154RecordFromUser).filter(function(r){
+      if(!branchFilter || branchFilter==='all') return true;
+      return r.branch === branchFilter || r.branch === 'all';
+    }).sort(function(a,b){ return (a.name||'').localeCompare(b.name||''); });
+  }
+  const staffAll = (typeof getStaff==='function') ? getStaff() : [];
+  const usersById = new Map();
+  usersAll.forEach(function(u){ if(u && u.id) usersById.set(u.id, u); });
+  const linkedViaStaff = new Set();
+  const out = [];
+  // Source 1: staff (preferred)
+  staffAll.forEach(function(s){
+    if(!staffPredicate(s)) return;
+    let linkedUser = null;
+    if(STAFF_AS_HR_SOURCE_PREFER_LINKED && s.linkedUserId){
+      linkedUser = usersById.get(s.linkedUserId) || null;
+      if(linkedUser) linkedViaStaff.add(linkedUser.id);
+    }
+    out.push(_hr154RecordFromStaff(s, linkedUser));
+  });
+  // Source 2: users not already covered via staff linkage
+  usersAll.forEach(function(u){
+    if(!u || linkedViaStaff.has(u.id)) return;
+    if(!userPredicate(u)) return;
+    out.push(_hr154RecordFromUser(u));
+  });
+  // Branch filter
+  const filtered = (!branchFilter || branchFilter==='all')
+    ? out
+    : out.filter(function(r){ return r.branch === branchFilter || r.branch === 'all'; });
+  return filtered.sort(function(a,b){ return (a.name||'').localeCompare(b.name||''); });
+}
+
+// [Phase HR1c.5.4] Active nurses · prefers staff · falls back to users.
+function getActiveNurses(branch){
+  return _hr154CollectActive(
+    function(s){ return s && s.roleGroup === 'nurse' && s.activeStatus === 'active'; },
+    function(u){ return u && u.role === 'nurse' && u.active !== false; },
+    branch
+  );
+}
+
+// [Phase HR1c.5.4] Active doctors · prefers staff · users fallback · HMC_DOCTORS legacy fallback only when both empty.
+// Tolerates Title-Case 'Doctor' from 12 seed rows that predate role_group migration.
+function getActiveDoctors(branch){
+  const out = _hr154CollectActive(
+    function(s){
+      const rg = s && (s.roleGroup || ((s.role === 'Doctor' || s.role === 'doctor') ? 'doctor' : null));
+      return rg === 'doctor' && (s.activeStatus === 'active' || s.status === 'Active');
+    },
+    function(u){ return u && u.role === 'doctor' && u.active !== false; },
+    branch
+  );
+  if(out.length === 0 && typeof HMC_DOCTORS !== 'undefined' && Array.isArray(HMC_DOCTORS)){
+    return HMC_DOCTORS.map(function(name){
+      return { id: name, staffId: null, userId: null, staffCode: null, name: name, nameAr: null,
+               jobTitle: null, roleGroup: 'doctor', branch: branch || null, active: true,
+               source: 'legacy', linked: false };
+    });
+  }
+  return out;
+}
+
+// [Phase HR1c.5.4] Active drivers · prefers staff · users fallback · NO legacy fallback.
+function getActiveDrivers(branch){
+  return _hr154CollectActive(
+    function(s){ return s && s.roleGroup === 'driver' && s.activeStatus === 'active'; },
+    function(u){ return u && u.role === 'driver' && u.active !== false; },
+    branch
+  );
+}
+
+// [Phase HR1c.5.4] Resolve staff_id for a given user_id via users.staff_id linkage.
+// Used by dual-write hooks · returns null when user has no staff_id (today: ALL 13 users).
+function _resolveStaffIdForUser(userId){
+  if(!userId) return null;
+  const users = (typeof getUsers==='function') ? getUsers() : [];
+  const u = users.find(function(x){ return x && x.id === userId; });
+  return (u && u.staffId) ? u.staffId : null;
+}
+
+window.getActiveNurses = getActiveNurses;
+window.getActiveDoctors = getActiveDoctors;
+window.getActiveDrivers = getActiveDrivers;
+window._resolveStaffIdForUser = _resolveStaffIdForUser;
+
+// [Phase HR1c.5.4] Compute + render data-hygiene counts · pure read · no Supabase calls.
+// Triggered by Settings page render via nav() post-render dispatch (NO inline <script> per Operating Rule #11).
+function _refreshDataHygiene(){
+  try {
+    const usersAll = (typeof getUsers==='function')?getUsers():[];
+    const staffAll = (typeof getStaff==='function')?getStaff():[];
+    const usersTotal = usersAll.length;
+    const usersLinked = usersAll.filter(function(u){ return u && u.staffId; }).length;
+    const usersUnlinked = usersTotal - usersLinked;
+    const staffCanLoginNoUser = staffAll.filter(function(s){ return s && s.canLogin === true && !s.linkedUserId; }).length;
+    const nursesViaHelper = (typeof getActiveNurses==='function') ? getActiveNurses().length : 0;
+    const doctorsViaHelper = (typeof getActiveDoctors==='function') ? getActiveDoctors().length : 0;
+    const driversViaHelper = (typeof getActiveDrivers==='function') ? getActiveDrivers().length : 0;
+    const staffNurses = staffAll.filter(function(s){ return s && s.roleGroup==='nurse' && s.activeStatus==='active'; }).length;
+    const staffDoctors = staffAll.filter(function(s){ return s && s.roleGroup==='doctor' && s.activeStatus==='active'; }).length;
+    const staffDrivers = staffAll.filter(function(s){ return s && s.roleGroup==='driver' && s.activeStatus==='active'; }).length;
+    const html =
+      '<div style="display:grid;grid-template-columns:repeat(auto-fit,minmax(220px,1fr));gap:10px">'+
+        '<div style="padding:8px;background:var(--g50);border-radius:6px"><strong>Users</strong><br>Total: '+usersTotal+
+          '<br>Linked to staff: <span style="color:'+(usersLinked>0?'var(--gr)':'var(--g500)')+'">'+usersLinked+'</span>'+
+          '<br>Without staff link: <span style="color:'+(usersUnlinked>0?'var(--am)':'var(--g500)')+'">'+usersUnlinked+'</span></div>'+
+        '<div style="padding:8px;background:var(--g50);border-radius:6px"><strong>Staff (login pending)</strong><br>'+
+          'Can login but no user: <span style="color:'+(staffCanLoginNoUser>0?'var(--am)':'var(--g500)')+'">'+staffCanLoginNoUser+'</span>'+
+          '<br><small style="color:var(--g500)">Linkage UI: HR1c.5.6</small></div>'+
+        '<div style="padding:8px;background:var(--g50);border-radius:6px"><strong>Active via helper</strong><br>'+
+          'Nurses: '+nursesViaHelper+' (staff:'+staffNurses+')<br>'+
+          'Doctors: '+doctorsViaHelper+' (staff:'+staffDoctors+')<br>'+
+          'Drivers: '+driversViaHelper+' (staff:'+staffDrivers+')</div>'+
+      '</div>'+
+      '<div style="margin-top:8px;font-size:11px;color:var(--g500)">'+
+        'Source-of-truth: <strong>Staff</strong> (HR1c.5 sequence in progress) · '+
+        '<code>STAFF_AS_HR_SOURCE_ENABLED='+STAFF_AS_HR_SOURCE_ENABLED+'</code></div>';
+    const body = document.getElementById('dataHygieneBody');
+    if(body) body.innerHTML = html;
+    const ts = document.getElementById('dataHygieneRefreshedAt');
+    if(ts) ts.textContent = 'Refreshed ' + new Date().toLocaleTimeString('en-GB');
+  } catch(e){
+    const body = document.getElementById('dataHygieneBody');
+    if(body) body.innerHTML = '<div style="color:#b91c1c">Error: '+(e && e.message || e)+'</div>';
+  }
+}
+window._refreshDataHygiene = _refreshDataHygiene;
 
 // Filtered cache read · returns active membership rows for a (branch, monthYM) — used by _rosterStaffRows extension in HR1c.4b.1b.
 function getRosterMembershipFor(branch, monthYM){
@@ -7139,7 +7337,10 @@ async function addNurseToPlannerExecute(){
       allMembership[idx].updatedAt = nowISO;
       row = allMembership[idx];
     } else {
-      row = { id:id, branch:branch, monthYm:monthYM, userId:uid, role:'nurse', status:'active',
+      // [Phase HR1c.5.4] Dual-write staffId · null today (linkage UI ships in HR1c.5.6)
+      row = { id:id, branch:branch, monthYm:monthYM, userId:uid,
+              staffId: (typeof _resolveStaffIdForUser==='function') ? _resolveStaffIdForUser(uid) : null,
+              role:'nurse', status:'active',
               createdBy:(CU && CU.id) ? CU.id : null, createdAt:nowISO, updatedAt:nowISO };
       allMembership.push(row);
     }
@@ -7676,6 +7877,7 @@ async function saveShiftEdit(shiftId){
     startTime: startTime+(startTime.length===5?':00':''),
     endTime:   endTime+(endTime.length===5?':00':''),
     doctorUserId: newDoctor || null,
+    doctorStaffId: newDoctor && (typeof _resolveStaffIdForUser==='function') ? _resolveStaffIdForUser(newDoctor) : null, // [Phase HR1c.5.4] dual-write
     notes: newNotes || null,
     updatedAt: nowISO
   });
@@ -7794,6 +7996,7 @@ async function saveShiftSchedule(){
     startTime: startTime+(startTime.length===5?':00':''),
     endTime: endTime+(endTime.length===5?':00':''),
     doctorUserId: doctorUserId || null,
+    doctorStaffId: doctorUserId && (typeof _resolveStaffIdForUser==='function') ? _resolveStaffIdForUser(doctorUserId) : null, // [Phase HR1c.5.4] dual-write
     status: 'planned', notes: notes || null,
     createdBy: (typeof CU!=='undefined' && CU) ? CU.id : null,
     updatedAt: nowISO
@@ -7890,6 +8093,7 @@ async function addShiftAssignment(shiftId, userId, role, staffName, silent){
     row = {
       id: _schedAssignmentId(shiftId, userId),
       shiftId: shiftId, userId: userId,
+      staffId: (typeof _resolveStaffIdForUser==='function') ? _resolveStaffIdForUser(userId) : null, // [Phase HR1c.5.4] dual-write
       staffName: staffName || userId,
       role: role,
       status: 'assigned',
@@ -19092,6 +19296,14 @@ function renderSettings(){
         <div><strong>💻 Desktop (Chrome/Edge)</strong><ol style="margin:4px 0 0 18px;padding:0;line-height:1.5"><li>${canInstall?'Click <strong>📲 Install App</strong> above':'Click the install icon ⊕ in the address bar'}</li><li>Confirm <strong>Install</strong></li></ol></div>
       </div>
     </div>`:''}
+  </div>
+  <!-- [Phase HR1c.5.4] Data Hygiene — staff/user linkage health snapshot · read-only · admin only -->
+  <div style="margin-bottom:14px" class="card">
+    <div class="ch"><div class="ct">📊 Data Hygiene — Staff &amp; User Linkage</div><span style="font-size:12px;color:var(--g500)" id="dataHygieneRefreshedAt"></span></div>
+    <div id="dataHygieneBody" style="font-size:12px;color:var(--g700);padding:8px 0">Loading…</div>
+    <div style="display:flex;gap:8px;margin-top:8px">
+      <button class="btn bs btn-sm" onclick="_refreshDataHygiene()">🔄 Refresh</button>
+    </div>
   </div>
   <div style="margin-bottom:14px" class="card">
     <div class="ch"><div class="ct">☁️ Supabase Sync</div><span id="syncStatus" style="font-size:12px;color:var(--g500)">Checking...</span></div>
