@@ -3659,15 +3659,23 @@ function _rosterDayColumns(monthYM){
 //   (B) nurses assigned to any shift in (branch, monthYM) — even if their home branch differs
 // Deduplicated by user.id and sorted alphabetically by name.
 // Returns: [{ id, name, role:'nurse', kind:'nurse' }, ...]
+// [Phase HR1c.5.5.1] Source-of-truth migrated to getActiveNurses() · staff is HR truth · users is fallback for unlinked nurses (e.g., mamsha_khedr).
+// Row shape extended with {staffId, userId, source, linked} for polymorphic cell-lookup helpers (F4–F7).
+// Source A (home-branch matching) reads from helper · Source B (cross-branch coverage) uses dual-key assignment match.
 function _rosterStaffRows(branch, monthYM){
   if(!branch || !monthYM) return [];
-  const usersAll = (typeof getUsers==='function') ? getUsers() : [];
-  // (A) Active nurses with matching home branch
-  const homeBranchNurses = usersAll
-    .filter(function(u){ return u && u.role==='nurse' && u.active!==false; })
-    .filter(function(u){ return !branch || branch==='all' || !u.branch || u.branch===branch || u.branch==='all'; })
-    .map(function(u){ return { id:u.id, name:u.name||u.username||u.id, role:'nurse', kind:'nurse' }; });
-  // (B) Nurses assigned to any shift in (branch, monthYM) · cross-branch coverage
+  const allNurses = (typeof getActiveNurses==='function') ? getActiveNurses() : [];
+  // (A) Active nurses with matching home branch (helper records · staff or user-only)
+  // [Phase HR1c.5.5.1] Tightened branch match: explicit match only (n.branch===branch OR n.branch==='all').
+  // Old loose filter `!n.branch` was a defensive net for users without branch (rare in practice ·
+  // none of the 13 nurse users had branch=null). With staff records, ~14 unlinked nurses have
+  // home_branch=NULL and would otherwise spuriously appear in every branch — fix tightens.
+  const homeBranchNurses = allNurses
+    .filter(function(n){ return n && n.active !== false; })
+    .filter(function(n){ return !branch || branch==='all' || n.branch===branch || n.branch==='all'; })
+    .map(function(n){ return { id: n.staffId || n.userId, name: n.name, role: 'nurse', kind: 'nurse',
+                                staffId: n.staffId, userId: n.userId, source: n.source, linked: n.linked }; });
+  // (B) Nurses assigned to any shift in (branch, monthYM) · cross-branch coverage · dual-key match
   const shifts = (typeof getShiftSchedules==='function') ? getShiftSchedules() : [];
   const shiftIdsInScope = new Set();
   shifts.forEach(function(s){
@@ -3677,21 +3685,26 @@ function _rosterStaffRows(branch, monthYM){
     shiftIdsInScope.add(s.id);
   });
   const allAssigns = (typeof getShiftAssignments==='function') ? getShiftAssignments() : [];
+  // Collect assignment-side identities (both staff_id and user_id keys preserved · legacy + future)
+  const assignedStaffIds = new Set();
   const assignedUserIds = new Set();
   allAssigns.forEach(function(a){
-    if(!a || !a.userId) return;
+    if(!a) return;
     if(a.status === 'removed') return;
     if(!shiftIdsInScope.has(a.shiftId)) return;
-    assignedUserIds.add(a.userId);
+    if(a.staffId) assignedStaffIds.add(a.staffId);
+    if(a.userId)  assignedUserIds.add(a.userId);
   });
-  const assignedNurses = Array.from(assignedUserIds).map(function(uid){
-    const u = usersAll.find(function(x){ return x && x.id===uid; });
-    if(!u) return null;
-    if(u.role !== 'nurse') return null;       // safety: only nurses (excludes doctors / head_nurse / etc.)
-    if(u.active === false) return null;        // safety: skip disabled accounts
-    return { id:u.id, name:u.name||u.username||u.id, role:'nurse', kind:'nurse' };
-  }).filter(Boolean);
-  // (C) Union by user.id · dedupe
+  // Resolve assigned identities via helper (preserves source/linked metadata · safety filters from helper)
+  const assignedNurses = allNurses
+    .filter(function(n){
+      if(!n || n.active === false) return false;
+      return (n.staffId && assignedStaffIds.has(n.staffId)) ||
+             (n.userId  && assignedUserIds.has(n.userId));
+    })
+    .map(function(n){ return { id: n.staffId || n.userId, name: n.name, role: 'nurse', kind: 'nurse',
+                                staffId: n.staffId, userId: n.userId, source: n.source, linked: n.linked }; });
+  // (C) Union by helper-canonical id (staffId || userId) · dedupe
   const seen = new Set();
   const merged = [];
   homeBranchNurses.concat(assignedNurses).forEach(function(n){
@@ -3716,9 +3729,16 @@ function _rosterShiftsForCell(staffId, dateISO, branch, allShifts, allAssigns){
   // [Phase HR1c.4b.1c] Defensive dedupe at read time · hides cache duplicates · pure read-only.
   allShifts = (typeof _dedupeById==='function') ? _dedupeById(allShifts) : (allShifts||[]);
   allAssigns = (typeof _dedupeById==='function') ? _dedupeById(allAssigns) : (allAssigns||[]);
+  // [Phase HR1c.5.5.1] Polymorphic entity · accepts string (legacy: userId) or {staffId, userId} object · dual-key match.
+  const probe = (typeof staffId === 'string')
+    ? { staffId: null, userId: staffId }
+    : { staffId: (staffId && staffId.staffId) || null, userId: (staffId && staffId.userId) || null };
   const myShiftIds = new Set(
     (allAssigns||[])
-      .filter(function(a){ return a && a.userId===staffId && a.status!=='removed'; })
+      .filter(function(a){
+        if(!a || a.status === 'removed') return false;
+        return (probe.staffId && a.staffId === probe.staffId) || (probe.userId && a.userId === probe.userId);
+      })
       .map(function(a){ return a.shiftId; })
   );
   const dayBefore = (typeof _addDaysISO==='function') ? _addDaysISO(dateISO, -1) : dateISO;
@@ -3731,9 +3751,10 @@ function _rosterShiftsForCell(staffId, dateISO, branch, allShifts, allAssigns){
       ((typeof _shiftIsOvernight==='function' && _shiftIsOvernight(s)) ||
        (typeof _shiftIs24h==='function' && _shiftIs24h(s)));
     if(!sameDay && !fromYesterdayOvernight) return false;
-    // User match: assigned OR is the doctor
+    // [Phase HR1c.5.5.1] User match: assigned (dual-key) OR is the doctor (dual-key on shift schedule)
     const isAssigned = myShiftIds.has(s.id);
-    const isDoctor = s.doctorUserId === staffId;
+    const isDoctor = (probe.staffId && s.doctorStaffId === probe.staffId) ||
+                     (probe.userId && s.doctorUserId === probe.userId);
     return isAssigned || isDoctor;
   });
   // Decorate + sort by startTime
@@ -3752,9 +3773,16 @@ function _rosterShiftsByStartDate(staffId, dateISO, branch, allShifts, allAssign
   // [Phase HR1c.4b.1c] Defensive dedupe at read time · hides cache duplicates · pure read-only.
   allShifts = (typeof _dedupeById==='function') ? _dedupeById(allShifts) : (allShifts||[]);
   allAssigns = (typeof _dedupeById==='function') ? _dedupeById(allAssigns) : (allAssigns||[]);
+  // [Phase HR1c.5.5.1] Polymorphic entity dispatch · same pattern as _rosterShiftsForCell.
+  const probe = (typeof staffId === 'string')
+    ? { staffId: null, userId: staffId }
+    : { staffId: (staffId && staffId.staffId) || null, userId: (staffId && staffId.userId) || null };
   const myShiftIds = new Set(
     (allAssigns||[])
-      .filter(function(a){ return a && a.userId===staffId && a.status!=='removed'; })
+      .filter(function(a){
+        if(!a || a.status === 'removed') return false;
+        return (probe.staffId && a.staffId === probe.staffId) || (probe.userId && a.userId === probe.userId);
+      })
       .map(function(a){ return a.shiftId; })
   );
   const matching = (allShifts||[]).filter(function(s){
@@ -3762,7 +3790,8 @@ function _rosterShiftsByStartDate(staffId, dateISO, branch, allShifts, allAssign
     if(s.branch !== branch && branch !== 'all') return false;
     if(s.date !== dateISO) return false;
     const isAssigned = myShiftIds.has(s.id);
-    const isDoctor = s.doctorUserId === staffId;
+    const isDoctor = (probe.staffId && s.doctorStaffId === probe.staffId) ||
+                     (probe.userId && s.doctorUserId === probe.userId);
     return isAssigned || isDoctor;
   });
   // Decorate + sort by startTime
@@ -5861,6 +5890,8 @@ function _rosterCellClick(staffId, dateISO){
 // Opens the popover (small modal · same .mbd/.modal/.mhdr/.mbody pattern as HR1c.2a).
 function _rosterCellPopover(shifts, staffId, dateISO){
   // Resolve staff name + role for header + edit-mode gating
+  // [Phase HR1c.5.5.1] Resolve via getActiveNurses() · accepts staffId-or-userId (matches both linked staff and user-only nurses)
+  const allNurses = (typeof getActiveNurses==='function') ? getActiveNurses() : [];
   const usersAll = (typeof getUsers==='function') ? getUsers() : [];
   const staffAll = (typeof getStaff==='function') ? getStaff() : [];
   const u = usersAll.find(function(x){ return x.id===staffId; });
@@ -5876,8 +5907,11 @@ function _rosterCellPopover(shifts, staffId, dateISO){
     hasPerm('hr.shifts.schedule') ||
     (hasPerm('hr.shifts.schedule.ownBranch') && branch===CU.branch)
   ));
-  const isNurseUser = !!(u && u.role==='nurse' && u.active!==false);
-  // Quick-Edit only available for active nurse users (HR1c.4a.1 + HR1c.4b nursing-only)
+  // [Phase HR1c.5.5.1] Dual-key resolution · matches linked staff (via staffId) or user-only nurses (via userId)
+  const isNurseUser = !!allNurses.find(function(n){
+    return (n.staffId && n.staffId === staffId) || (n.userId && n.userId === staffId);
+  });
+  // Quick-Edit only available for active nurses (HR1c.4a.1 + HR1c.4b nursing-only)
   const editAllowed = canManage && isNurseUser;
   const safeStaff = String(staffId||'').replace(/'/g, "\\'");
   const safeDate = String(dateISO||'').replace(/'/g, "\\'");
@@ -6602,62 +6636,55 @@ function _plannerCompactTimeLabel(s){
 // [Phase HR1c.4b.1b] All-Clinics nurse rows · union of (assignments-this-month) + (membership-this-month).
 // Permission-scoped: head_nurse → own-branch · admin/hr_manager → all branches.
 // Excludes home-branch source (that's Branch View's job). Defensive role/active filters.
+// [Phase HR1c.5.5.1] Source-of-truth migrated to getActiveNurses() · helper produces unified staff/user records.
+// Filter: nurses with shift_assignments OR monthly_roster_staff membership in this month · dual-keyed.
+// Row shape extended with {staffId, userId, source, linked} for polymorphic cell-lookup helpers (F6/F7).
 function _plannerStaffRows(monthYM){
   if(!monthYM) return [];
-  const usersAll = (typeof getUsers==='function')?getUsers():[];
+  const allNurses = (typeof getActiveNurses==='function') ? getActiveNurses() : [];
   const allShifts = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
   const allAssigns = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
   const allMembership = (typeof getMonthlyRosterStaff==='function')?getMonthlyRosterStaff():[];
-  // Determine permission scope
+  // Determine permission scope (unchanged)
   const hasAll = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
   const ownBranchOnly = (typeof hasPerm==='function' && !hasAll && hasPerm('hr.shifts.schedule.ownBranch') && CU && CU.branch && CU.branch!=='all') ? CU.branch : null;
-  // Source 1: nurses with shift_assignments where shift.date in month
+  // Build "shifts in month" set (permission-scoped)
   const shiftIdsInMonth = new Set();
-  const shiftBranchById = {};
   allShifts.forEach(function(s){
     if(!s || !s.id || !s.date) return;
     if(!s.date.startsWith(monthYM)) return;
     if(ownBranchOnly && s.branch !== ownBranchOnly) return;
     shiftIdsInMonth.add(s.id);
-    shiftBranchById[s.id] = s.branch;
   });
-  const fromAssignments = new Set();
-  allAssigns.forEach(function(a){
-    if(!a || !a.userId) return;
-    if(a.status === 'removed') return;
-    if(a.role !== 'nurse') return;
-    if(!shiftIdsInMonth.has(a.shiftId)) return;
-    fromAssignments.add(a.userId);
-  });
-  // Source 2: nurses with monthly_roster_staff membership for this month
-  const fromMembership = new Set();
-  allMembership.forEach(function(r){
-    if(!r || !r.userId) return;
-    if(r.status === 'removed') return;
-    if(r.monthYm !== monthYM) return;
-    if(ownBranchOnly && r.branch !== ownBranchOnly) return;
-    fromMembership.add(r.userId);
-  });
-  // Union + dedupe + safety filters
-  const seen = new Set();
-  const out = [];
-  [fromAssignments, fromMembership].forEach(function(set){
-    set.forEach(function(uid){
-      if(seen.has(uid)) return;
-      seen.add(uid);
-      const u = usersAll.find(function(x){ return x && x.id===uid; });
-      if(!u) return;
-      if(u.role !== 'nurse') return;
-      if(u.active === false) return;
-      out.push({
-        id: u.id,
-        name: u.name||u.username||u.id,
-        homeBranch: u.branch||'',
-        homeBranchCode: _branchCode(u.branch||'')
-      });
+  // Filter nurses by: has assignment in this month OR has membership for this month · dual-key match
+  const visible = allNurses.filter(function(n){
+    if(!n || n.active === false) return false;
+    const hasAssignment = allAssigns.some(function(a){
+      if(!a || a.status === 'removed' || a.role !== 'nurse') return false;
+      if(!shiftIdsInMonth.has(a.shiftId)) return false;
+      return (n.staffId && a.staffId === n.staffId) || (n.userId && a.userId === n.userId);
     });
+    if(hasAssignment) return true;
+    const hasMembership = allMembership.some(function(r){
+      if(!r || r.status === 'removed' || r.monthYm !== monthYM) return false;
+      if(ownBranchOnly && r.branch !== ownBranchOnly) return false;
+      return (n.staffId && r.staffId === n.staffId) || (n.userId && r.userId === n.userId);
+    });
+    return hasMembership;
   });
-  return out.sort(function(a,b){ return (a.name||'').localeCompare(b.name||''); });
+  // Build rows · row.id is staffId-or-userId (canonical · downstream cell helpers handle both)
+  return visible.map(function(n){
+    return {
+      id: n.staffId || n.userId,
+      staffId: n.staffId,
+      userId: n.userId,
+      name: n.name,
+      homeBranch: n.branch || '',
+      homeBranchCode: _branchCode(n.branch || ''),
+      source: n.source,
+      linked: n.linked
+    };
+  }).sort(function(a,b){ return (a.name||'').localeCompare(b.name||''); });
 }
 
 // [Phase HR1c.4b.1b] Cross-branch shift lookup for a (nurse, dateISO) cell · doctor path EXCLUDED (planner is nurses-only).
@@ -6670,9 +6697,16 @@ function _plannerShiftsForCell(staffId, dateISO, allShifts, allAssigns){
   allAssigns = (typeof _dedupeById==='function') ? _dedupeById(allAssigns) : (allAssigns||[]);
   const hasAll = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
   const ownBranchOnly = (typeof hasPerm==='function' && !hasAll && hasPerm('hr.shifts.schedule.ownBranch') && CU && CU.branch && CU.branch!=='all') ? CU.branch : null;
+  // [Phase HR1c.5.5.1] Polymorphic entity dispatch · planner is nurses-only · doctor path EXCLUDED.
+  const probe = (typeof staffId === 'string')
+    ? { staffId: null, userId: staffId }
+    : { staffId: (staffId && staffId.staffId) || null, userId: (staffId && staffId.userId) || null };
   const myShiftIds = new Set(
     (allAssigns||[])
-      .filter(function(a){ return a && a.userId===staffId && a.status!=='removed' && a.role==='nurse'; })
+      .filter(function(a){
+        if(!a || a.status === 'removed' || a.role !== 'nurse') return false;
+        return (probe.staffId && a.staffId === probe.staffId) || (probe.userId && a.userId === probe.userId);
+      })
       .map(function(a){ return a.shiftId; })
   );
   const dayBefore = (typeof _addDaysISO==='function') ? _addDaysISO(dateISO, -1) : dateISO;
@@ -6702,9 +6736,16 @@ function _plannerShiftsByStartDate(staffId, dateISO, allShifts, allAssigns){
   allAssigns = (typeof _dedupeById==='function') ? _dedupeById(allAssigns) : (allAssigns||[]);
   const hasAll = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
   const ownBranchOnly = (typeof hasPerm==='function' && !hasAll && hasPerm('hr.shifts.schedule.ownBranch') && CU && CU.branch && CU.branch!=='all') ? CU.branch : null;
+  // [Phase HR1c.5.5.1] Polymorphic entity dispatch · planner start-date variant · nurses-only.
+  const probe = (typeof staffId === 'string')
+    ? { staffId: null, userId: staffId }
+    : { staffId: (staffId && staffId.staffId) || null, userId: (staffId && staffId.userId) || null };
   const myShiftIds = new Set(
     (allAssigns||[])
-      .filter(function(a){ return a && a.userId===staffId && a.status!=='removed' && a.role==='nurse'; })
+      .filter(function(a){
+        if(!a || a.status === 'removed' || a.role !== 'nurse') return false;
+        return (probe.staffId && a.staffId === probe.staffId) || (probe.userId && a.userId === probe.userId);
+      })
       .map(function(a){ return a.shiftId; })
   );
   const matching = (allShifts||[]).filter(function(s){
