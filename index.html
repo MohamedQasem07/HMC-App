@@ -7315,23 +7315,41 @@ function openAddNurseToPlannerModal(){
   let monthLbl = monthYM;
   try { monthLbl = new Date(monthYM+'-01T00:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'}); } catch(e){}
   const lblEl = document.getElementById('anp_month_lbl'); if(lblEl) lblEl.textContent = monthLbl;
-  // Build nurse list · exclude already-on-planner-this-month
-  const usersAll = (typeof getUsers==='function')?getUsers():[];
-  const alreadyIn = new Set(_plannerStaffRows(monthYM).map(function(r){ return r.id; }));
-  const eligible = usersAll
-    .filter(function(u){ return u && u.role==='nurse' && u.active!==false; })
-    .filter(function(u){ return !ownBranchOnly || u.branch === ownBranchOnly; })
-    .filter(function(u){ return !alreadyIn.has(u.id); })
-    .sort(function(a,b){ return (a.name||a.username||a.id||'').localeCompare(b.name||b.username||b.id||''); });
+  // [Phase HR1c.5.5.2a] Source-of-truth migrated to getActiveNurses() · surfaces all 22 active nurses
+  // (linked + staff-only). Already-on-planner exclusion uses dual-key match against rows from
+  // _plannerStaffRows (HR1c.5.5.1 row shape includes staffId + userId).
+  // Each checkbox carries data-staff-id + data-user-id + data-name for dual-write save (G2).
+  const allNurses = (typeof getActiveNurses==='function') ? getActiveNurses() : [];
+  // Build dual-key Sets from existing planner rows
+  const plannerRows = _plannerStaffRows(monthYM);
+  const alreadyInStaffIds = new Set(plannerRows.filter(function(r){ return r.staffId; }).map(function(r){ return r.staffId; }));
+  const alreadyInUserIds  = new Set(plannerRows.filter(function(r){ return r.userId;  }).map(function(r){ return r.userId; }));
+  // Eligible = active nurses · branch-scoped · NOT already in planner (matches by staffId OR userId)
+  const eligible = allNurses
+    .filter(function(n){ return n && n.active !== false; })
+    .filter(function(n){
+      if(!ownBranchOnly) return true;
+      return n.branch === ownBranchOnly || n.branch === 'all';
+    })
+    .filter(function(n){
+      const inByStaff = n.staffId && alreadyInStaffIds.has(n.staffId);
+      const inByUser  = n.userId  && alreadyInUserIds.has(n.userId);
+      return !(inByStaff || inByUser);
+    })
+    .sort(function(a,b){ return (a.name||'').localeCompare(b.name||''); });
   const list = document.getElementById('anp_nurses');
   if(list){
     if(!eligible.length){
       list.innerHTML = '<div style="color:var(--g500);padding:6px">No eligible nurses · all active nurses are already in this month\'s planner</div>';
     } else {
       list.innerHTML = eligible.map(function(n){
-        const homeName = (n.branch && n.branch!=='all') ? (getBr(n.branch).name||n.branch) : '—';
-        return '<label style="display:block;padding:3px 0"><input type="checkbox" class="anp-cb" data-uid="'+n.id+'"> '+
-          (n.name||n.username||n.id)+
+        const homeName = n.branch ? (getBr(n.branch).name || n.branch) : '—';
+        const safeName = (n.name||'').replace(/"/g,'&quot;');
+        return '<label style="display:block;padding:3px 0"><input type="checkbox" class="anp-cb"'+
+          ' data-staff-id="'+(n.staffId||'')+'"'+
+          ' data-user-id="'+(n.userId||'')+'"'+
+          ' data-name="'+safeName+'"> '+
+          (n.name||'?')+
           ' <span style="font-size:10px;color:var(--g500)">(home: '+homeName+')</span>'+
           '</label>';
       }).join('');
@@ -7358,19 +7376,33 @@ async function addNurseToPlannerExecute(){
   const applyBtn = document.getElementById('anp_apply'); if(applyBtn) applyBtn.disabled = true;
   const cancelBtn = document.getElementById('anp_cancel'); if(cancelBtn) cancelBtn.disabled = true;
   const prog = document.getElementById('anp_progress');
-  const usersAll = (typeof getUsers==='function')?getUsers():[];
+  // [Phase HR1c.5.5.2a] Read dual-key data attributes from migrated checkboxes (G1).
+  // Resolve nurse identity via getActiveNurses() helper · supports linked + staff-only + legacy user-only.
+  const allNurses = (typeof getActiveNurses==='function') ? getActiveNurses() : [];
   const allMembership = (typeof getMonthlyRosterStaff==='function')?getMonthlyRosterStaff():[];
   const nowISO = new Date().toISOString();
   let added = 0;
+  let skippedNoBranch = 0;
   for(let i=0;i<checked.length;i++){
     const cb = checked[i];
-    const uid = cb.dataset.uid;
-    const u = usersAll.find(function(x){ return x && x.id===uid; });
-    if(!u || u.role !== 'nurse' || u.active === false) continue;
-    const branch = (u.branch && u.branch!=='all') ? u.branch : '';
-    if(!branch) continue;
-    if(prog){ prog.style.display='block'; prog.innerHTML='⏳ Adding nurse '+(i+1)+' of '+checked.length+' · '+(u.name||uid); }
-    const id = (typeof _schedRosterMembershipId==='function') ? _schedRosterMembershipId(branch, monthYM, uid) : null;
+    const staffId = cb.dataset.staffId || null;
+    const userId  = cb.dataset.userId  || null;
+    const cbName  = cb.dataset.name    || '';
+    // Find the helper record (for branch resolution + safety filter)
+    const n = allNurses.find(function(x){
+      return (staffId && x.staffId === staffId) || (userId && x.userId === userId);
+    });
+    if(!n || n.active === false) continue;
+    // Branch resolution: prefer staff.home_branch · fallback to user.branch (already merged in helper)
+    const branch = (n.branch && n.branch !== 'all') ? n.branch : '';
+    if(!branch){
+      skippedNoBranch++;
+      continue;
+    }
+    if(prog){ prog.style.display='block'; prog.innerHTML='⏳ Adding nurse '+(i+1)+' of '+checked.length+' · '+(n.name||cbName||staffId||userId); }
+    // [Phase HR1c.5.5.2a · D1 β] Stable membership id uses staffId when known · userId fallback.
+    const stableKey = staffId || userId;
+    const id = (typeof _schedRosterMembershipId==='function') ? _schedRosterMembershipId(branch, monthYM, stableKey) : null;
     if(!id) continue;
     // UPSERT in cache: if existing with same id and removed → flip to active; else add new
     const idx = allMembership.findIndex(function(r){ return r && r.id===id; });
@@ -7378,21 +7410,33 @@ async function addNurseToPlannerExecute(){
     if(idx >= 0){
       allMembership[idx].status = 'active';
       allMembership[idx].updatedAt = nowISO;
+      // [Phase HR1c.5.5.2a · D5 α] Patch in dual-key on update if missing (forward-compat for legacy rows).
+      if(staffId && !allMembership[idx].staffId) allMembership[idx].staffId = staffId;
+      if(userId  && !allMembership[idx].userId)  allMembership[idx].userId  = userId;
       row = allMembership[idx];
     } else {
       // [Phase HR1c.5.4] Dual-write staffId · null today (linkage UI ships in HR1c.5.6)
-      row = { id:id, branch:branch, monthYm:monthYM, userId:uid,
-              staffId: (typeof _resolveStaffIdForUser==='function') ? _resolveStaffIdForUser(uid) : null,
+      // [Phase HR1c.5.5.2a] staffId now sourced from data-staff-id attribute (G1) instead of _resolveStaffIdForUser fallback.
+      // [Phase HR1c.5.5.2a · D5 α] Always write both keys explicitly · null when unknown.
+      row = { id:id, branch:branch, monthYm:monthYM,
+              userId: userId,
+              staffId: staffId,
               role:'nurse', status:'active',
               createdBy:(CU && CU.id) ? CU.id : null, createdAt:nowISO, updatedAt:nowISO };
       allMembership.push(row);
     }
     if(typeof saveMonthlyRosterStaff==='function') saveMonthlyRosterStaff(allMembership);
     if(typeof _pushMonthlyRosterStaff==='function') await _pushMonthlyRosterStaff(row);
-    if(typeof logAccess==='function') logAccess('hr.shift.planner_member_added', id, branch+'|'+monthYM+'|'+uid);
+    if(typeof logAccess==='function') logAccess('hr.shift.planner_member_added', id, branch+'|'+monthYM+'|staff='+(staffId||'')+'|user='+(userId||''));
     added++;
   }
-  if(typeof toast==='function') toast('👥 '+added+' nurse'+(added===1?'':'s')+' added to planner','ok');
+  if(typeof toast==='function'){
+    if(skippedNoBranch > 0){
+      toast('👥 '+added+' added · ⚠ '+skippedNoBranch+' skipped (no home_branch · set via Staff & HR)','warn');
+    } else {
+      toast('👥 '+added+' nurse'+(added===1?'':'s')+' added to planner','ok');
+    }
+  }
   closeAddNurseToPlannerModal();
   if(typeof _plannerFilterChange==='function') _plannerFilterChange();
 }
