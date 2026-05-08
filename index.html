@@ -3704,6 +3704,35 @@ function _rosterShiftsForCell(staffId, dateISO, branch, allShifts, allAssigns){
   }).sort(function(a,b){ return (a.startTime||'').localeCompare(b.startTime||''); });
 }
 
+// [Phase HR1c.4b.1c.1] START-DATE variant of _rosterShiftsForCell · NO overnight bleed-back.
+// Branch View Monthly Roster is a PLANNING view: a shift belongs to its start-date cell only.
+// Preserves doctor-OR-assigned union (`isAssigned || isDoctor`) so doctor cells still render via `s.doctorUserId`.
+// `_rosterShiftsForCell` (coverage variant) is preserved in source for future HR1d.1+ live coverage consumers.
+function _rosterShiftsByStartDate(staffId, dateISO, branch, allShifts, allAssigns){
+  if(!staffId || !dateISO || !branch) return [];
+  // [Phase HR1c.4b.1c] Defensive dedupe at read time · hides cache duplicates · pure read-only.
+  allShifts = (typeof _dedupeById==='function') ? _dedupeById(allShifts) : (allShifts||[]);
+  allAssigns = (typeof _dedupeById==='function') ? _dedupeById(allAssigns) : (allAssigns||[]);
+  const myShiftIds = new Set(
+    (allAssigns||[])
+      .filter(function(a){ return a && a.userId===staffId && a.status!=='removed'; })
+      .map(function(a){ return a.shiftId; })
+  );
+  const matching = (allShifts||[]).filter(function(s){
+    if(!s) return false;
+    if(s.branch !== branch && branch !== 'all') return false;
+    if(s.date !== dateISO) return false;
+    const isAssigned = myShiftIds.has(s.id);
+    const isDoctor = s.doctorUserId === staffId;
+    return isAssigned || isDoctor;
+  });
+  // Decorate + sort by startTime
+  return matching.map(function(s){
+    const isAssigned = myShiftIds.has(s.id);
+    return Object.assign({}, s, { assignmentRole: isAssigned ? 'nurse' : 'doctor' });
+  }).sort(function(a,b){ return (a.startTime||'').localeCompare(b.startTime||''); });
+}
+
 // Returns <td>...</td> HTML string for a single roster cell.
 // shifts is the output of _rosterShiftsForCell · hasConflict is a boolean.
 // Stacked split-cell when shifts.length >= 2 (D3) · CSS class .rost-multi handles mobile collapse.
@@ -3749,7 +3778,8 @@ function _rosterBuildCSVRows(branch, monthYM){
   const rows = [header];
   staff.forEach(function(p){
     const cells = days.map(function(d){
-      const shifts = _rosterShiftsForCell(p.id, d.date, branch, allShifts, allAssigns);
+      // [Phase HR1c.4b.1c.1] CSV uses start-date helper · matches Branch View grid + Print.
+      const shifts = _rosterShiftsByStartDate(p.id, d.date, branch, allShifts, allAssigns);
       if(!shifts.length) return p.kind==='doctor' ? '-' : 'OFF';
       if(shifts.length === 1) return (typeof _shiftCellLabel==='function') ? _shiftCellLabel(shifts[0]) : (shifts[0].shiftType||'?');
       return shifts.map(function(s){ return (typeof _shiftCellLabel==='function') ? _shiftCellLabel(s) : (s.shiftType||'?'); }).join('+');
@@ -5360,12 +5390,13 @@ function _dedupeById(arr){
   return Array.from(m.values());
 }
 
-// [Phase HR1c.4b.1c] Find shifts where `userId` already has an active nurse assignment on `dateISO`,
-// EXCLUDING `excludeShiftId` (so callers can detect "would this make a 2nd shift on the same day").
-// Includes overnight bleed-back (24h or night shift on day-1 still covers `dateISO`).
+// [Phase HR1c.4b.1c.1] Coverage helper — RENAMED from _findActiveSameDateShiftsFor (HR1c.4b.1c).
+// Reserved for FUTURE coverage views (HR1d.1 Today On Duty · Live Coverage Dashboard · coverage gap reports).
+// Returns shifts where `userId` is on duty during `dateISO` — INCLUDING overnight bleed-back from day-1
+// (a 20:00–08:00 night shift on May 1 covers May 2 morning hours · a 24h shift on May 1 covers May 2 too).
 // Filters: cancelled shifts excluded · removed assignments excluded · only role='nurse'.
-// Used by _rosterCellAssign (per-call confirm) · applyPlanMonthExecute (pre-batch summary) · applyPatternExecute (post-batch toast).
-function _findActiveSameDateShiftsFor(userId, dateISO, excludeShiftId){
+// CURRENT CALLERS: none. Kept in source for HR1d.1+ to consume directly.
+function _findActiveCoverageShiftsFor(userId, dateISO, excludeShiftId){
   if(!userId || !dateISO) return [];
   const allShifts = _dedupeById((typeof getShiftSchedules==='function')?getShiftSchedules():[]);
   const allAssigns = _dedupeById((typeof getShiftAssignments==='function')?getShiftAssignments():[]);
@@ -5386,8 +5417,33 @@ function _findActiveSameDateShiftsFor(userId, dateISO, excludeShiftId){
     return sameDay || fromYesterday;
   });
 }
+
+// [Phase HR1c.4b.1c.1] Planning/payroll helper · NO overnight bleed-back · ONLY shifts whose start date
+// equals `dateISO`. Use this for all current planning surfaces:
+//   - Plan Month pre-batch confirm (F7) · Cell Quick-Edit confirm (F6) · Apply Pattern post-batch toast (F8)
+// A consecutive-night roster (Night May 1 + Night May 2 + Night May 3) MUST NOT count May 1's bleed
+// as a same-date conflict on May 2. Each night belongs to its own start-date cell.
+function _findActiveSameStartDateShiftsFor(userId, dateISO, excludeShiftId){
+  if(!userId || !dateISO) return [];
+  const allShifts = _dedupeById((typeof getShiftSchedules==='function')?getShiftSchedules():[]);
+  const allAssigns = _dedupeById((typeof getShiftAssignments==='function')?getShiftAssignments():[]);
+  const myShiftIds = new Set(
+    allAssigns
+      .filter(function(a){ return a && a.userId===userId && a.status!=='removed' && a.role==='nurse'; })
+      .map(function(a){ return a.shiftId; })
+  );
+  return allShifts.filter(function(s){
+    if(!s || s.id===excludeShiftId || s.status==='cancelled') return false;
+    if(!myShiftIds.has(s.id)) return false;
+    return s.date === dateISO;
+  });
+}
 window._dedupeById = _dedupeById;
-window._findActiveSameDateShiftsFor = _findActiveSameDateShiftsFor;
+window._findActiveCoverageShiftsFor = _findActiveCoverageShiftsFor;
+window._findActiveSameStartDateShiftsFor = _findActiveSameStartDateShiftsFor;
+// [Phase HR1c.4b.1c.1] Back-compat alias · external/test code that depended on the HR1c.4b.1c name keeps working.
+// Points to the START-DATE variant (the one current planning callers use).
+window._findActiveSameDateShiftsFor = _findActiveSameStartDateShiftsFor;
 
 // Per-row Supabase push (uses HR1b.3 saveGeofenceConfig pattern)
 async function _pushShiftSchedule(row){
@@ -5502,7 +5558,8 @@ function _rosterBuildHTML(branch, monthYM){
   // Body rows
   const tbody = '<tbody>'+staff.map(function(p){
     const cells = days.map(function(d){
-      const shifts = _rosterShiftsForCell(p.id, d.date, branch, allShifts, allAssigns);
+      // [Phase HR1c.4b.1c.1] Branch View grid uses start-date helper · prevents consecutive-night double-display.
+      const shifts = _rosterShiftsByStartDate(p.id, d.date, branch, allShifts, allAssigns);
       // Conflict: more than one shift OR overlap detected
       let hasConflict = shifts.length > 1;
       if(!hasConflict && typeof findShiftConflicts==='function'){
@@ -5556,7 +5613,8 @@ function _rosterCellClick(staffId, dateISO){
   if(!branch) return;
   const allShifts = (typeof getShiftSchedules==='function') ? getShiftSchedules() : [];
   const allAssigns = (typeof getShiftAssignments==='function') ? getShiftAssignments() : [];
-  const shifts = _rosterShiftsForCell(staffId, dateISO, branch, allShifts, allAssigns);
+  // [Phase HR1c.4b.1c.1] Cell click popover uses start-date helper · matches grid display.
+  const shifts = _rosterShiftsByStartDate(staffId, dateISO, branch, allShifts, allAssigns);
   _rosterCellPopover(shifts, staffId, dateISO);
 }
 // Opens the popover (small modal · same .mbd/.modal/.mhdr/.mbody pattern as HR1c.2a).
@@ -5892,8 +5950,9 @@ async function _rosterCellAssign(staffId, dateISO, branch, shiftType){
   const already = allAssigns.find(function(a){ return a && a.shiftId===expectedShiftId && a.userId===staffId && a.status!=='removed'; });
   if(already){ if(typeof toast==='function') toast('Already assigned to this shift','warn'); _rosterClosePopover(); return; }
   // [Phase HR1c.4b.1c] Same-day double-coverage confirm · admin must consciously approve cross-branch/cross-type same-date assignments.
-  if(typeof _findActiveSameDateShiftsFor==='function'){
-    const conflicts = _findActiveSameDateShiftsFor(staffId, dateISO, expectedShiftId);
+  // [Phase HR1c.4b.1c.1] Use START-DATE conflict helper · ignores yesterday's overnight bleed.
+  if(typeof _findActiveSameStartDateShiftsFor==='function'){
+    const conflicts = _findActiveSameStartDateShiftsFor(staffId, dateISO, expectedShiftId);
     if(conflicts.length){
       const list = conflicts.map(function(s){
         const brName = (typeof getBr==='function')?(getBr(s.branch).name||s.branch):s.branch;
@@ -5944,19 +6003,15 @@ async function _rosterCellOffWholeDay(staffId, dateISO, branch){
     (hasPerm('hr.shifts.schedule.ownBranch') && branch===CU.branch)
   ));
   if(!canManage){ if(typeof toast==='function') toast('Permission denied','err'); return; }
-  // Find all shifts in (branch, date) and the user's active assignments on those shifts
+  // [Phase HR1c.4b.1c.1] OFF entire day · START-DATE only · remove assignments whose SHIFT START DATE
+  // equals dateISO. Yesterday's overnight (bleeds into today's morning) stays untouched — admin must
+  // OFF the start date to remove that shift.
   const allShifts = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
   const allAssigns = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
-  const dayBefore = (typeof _addDaysISO==='function') ? _addDaysISO(dateISO, -1) : dateISO;
   const shiftIdsForDay = new Set();
   allShifts.forEach(function(s){
     if(!s || s.branch !== branch) return;
-    const sameDay = s.date === dateISO;
-    const fromYesterday = s.date === dayBefore && (
-      (typeof _shiftIsOvernight==='function' && _shiftIsOvernight(s)) ||
-      (typeof _shiftIs24h==='function' && _shiftIs24h(s))
-    );
-    if(sameDay || fromYesterday) shiftIdsForDay.add(s.id);
+    if(s.date === dateISO) shiftIdsForDay.add(s.id);
   });
   const targets = allAssigns.filter(function(a){
     return a && a.userId===staffId && a.status!=='removed' && shiftIdsForDay.has(a.shiftId);
@@ -6238,8 +6293,9 @@ async function applyPatternExecute(){
   } catch(e){ /* silent · conflict re-check is best-effort */ }
   // [Phase HR1c.4b.1c] Post-batch multi-shift summary · counts (staff,date) pairs that now have
   // 2+ active shifts (cross-branch coverage) · silent during execution · single info toast at end.
+  // [Phase HR1c.4b.1c.1] Use START-DATE conflict helper · summary toast counts only same-start-date double-coverage.
   try {
-    if(typeof _findActiveSameDateShiftsFor==='function'){
+    if(typeof _findActiveSameStartDateShiftsFor==='function'){
       let multiDayCount = 0;
       for(const p of staff){
         const seenDays = new Set();
@@ -6247,7 +6303,7 @@ async function applyPatternExecute(){
           if(seenDays.has(d)) continue;
           seenDays.add(d);
           const expectedSid = (typeof _schedShiftId==='function') ? _schedShiftId(branch, d, shiftType) : null;
-          const others = _findActiveSameDateShiftsFor(p.id, d, expectedSid);
+          const others = _findActiveSameStartDateShiftsFor(p.id, d, expectedSid);
           if(others.length) multiDayCount++;
         }
       }
@@ -6393,6 +6449,32 @@ function _plannerShiftsForCell(staffId, dateISO, allShifts, allAssigns){
   return matching.slice().sort(function(a,b){ return (a.startTime||'').localeCompare(b.startTime||''); });
 }
 
+// [Phase HR1c.4b.1c.1] START-DATE variant of _plannerShiftsForCell · NO overnight bleed-back.
+// The Nurse Monthly Planner is a PLANNING/PAYROLL view: a shift belongs to its start-date cell only.
+// Consecutive nights (Night May 1 + Night May 2) render as ONE shift per cell (May 1 cell shows May 1 night;
+// May 2 cell shows May 2 night) — NOT "2 shifts" because of bleed-over.
+// `_plannerShiftsForCell` (coverage variant) is preserved in source for future HR1d.1 Today-On-Duty consumers.
+function _plannerShiftsByStartDate(staffId, dateISO, allShifts, allAssigns){
+  if(!staffId || !dateISO) return [];
+  // [Phase HR1c.4b.1c] Defensive dedupe — protects against cache duplicates.
+  allShifts = (typeof _dedupeById==='function') ? _dedupeById(allShifts) : (allShifts||[]);
+  allAssigns = (typeof _dedupeById==='function') ? _dedupeById(allAssigns) : (allAssigns||[]);
+  const hasAll = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
+  const ownBranchOnly = (typeof hasPerm==='function' && !hasAll && hasPerm('hr.shifts.schedule.ownBranch') && CU && CU.branch && CU.branch!=='all') ? CU.branch : null;
+  const myShiftIds = new Set(
+    (allAssigns||[])
+      .filter(function(a){ return a && a.userId===staffId && a.status!=='removed' && a.role==='nurse'; })
+      .map(function(a){ return a.shiftId; })
+  );
+  const matching = (allShifts||[]).filter(function(s){
+    if(!s) return false;
+    if(ownBranchOnly && s.branch !== ownBranchOnly) return false;
+    if(!myShiftIds.has(s.id)) return false;
+    return s.date === dateISO;
+  });
+  return matching.slice().sort(function(a,b){ return (a.startTime||'').localeCompare(b.startTime||''); });
+}
+
 // [Phase HR1c.4b.1b] Two-line cell HTML · BRANCH-CODE on top · icon+time on bottom · +1d for overnight/24h.
 function _plannerCellHTML(staffId, dateISO, shifts, hasConflict){
   const safeStaff = String(staffId||'').replace(/'/g, "\\'");
@@ -6452,7 +6534,8 @@ function _plannerBuildHTML(monthYM){
   // Body rows
   const tbody = '<tbody>'+staff.map(function(p){
     const cells = days.map(function(d){
-      const shifts = _plannerShiftsForCell(p.id, d.date, allShifts, allAssigns);
+      // [Phase HR1c.4b.1c.1] Use start-date helper · prevents consecutive-night double-display.
+      const shifts = _plannerShiftsByStartDate(p.id, d.date, allShifts, allAssigns);
       let hasConflict = shifts.length > 1;
       if(!hasConflict && typeof findShiftConflicts==='function'){
         try { hasConflict = (findShiftConflicts(p.id, d.date) || []).length > 0; } catch(e){}
@@ -6640,7 +6723,8 @@ function _planMonthBuildDayGrid(monthYM, nurseId){
   const allAssigns = (typeof getShiftAssignments==='function') ? getShiftAssignments() : [];
   const today = new Date().toISOString().split('T')[0];
   grid.innerHTML = days.map(function(d){
-    const shifts = _plannerShiftsForCell(nurseId, d.date, allShifts, allAssigns);
+    // [Phase HR1c.4b.1c.1] Use start-date helper · day-grid label reflects the shift starting that day, not bleed-over.
+    const shifts = _plannerShiftsByStartDate(nurseId, d.date, allShifts, allAssigns);
     let stateLbl = '';
     if(!shifts.length){ stateLbl = '<span style="color:var(--g400)">—</span>'; }
     else if(shifts.length === 1){
@@ -6806,11 +6890,12 @@ async function applyPlanMonthExecute(){
     }
     // [Phase HR1c.4b.1c] Pre-batch summary confirm · single dialog covering ALL selected days that
     // would result in cross-branch/cross-type same-date double-coverage. Default = cancel.
-    if(typeof _findActiveSameDateShiftsFor==='function'){
+    // [Phase HR1c.4b.1c.1] Use START-DATE conflict helper · ignores yesterday's overnight bleed.
+    if(typeof _findActiveSameStartDateShiftsFor==='function'){
       const conflictDays = [];
       for(const day of sel){
         const expectedSid = (typeof _schedShiftId==='function') ? _schedShiftId(branch, day, shiftType) : null;
-        const others = _findActiveSameDateShiftsFor(nurseId, day, expectedSid);
+        const others = _findActiveSameStartDateShiftsFor(nurseId, day, expectedSid);
         if(others.length) conflictDays.push({ day: day, count: others.length });
       }
       if(conflictDays.length){
@@ -6874,23 +6959,19 @@ async function applyPlanMonthExecute(){
       else toast('✅ '+assignedCount+' assigned · ⚠ '+skippedTimeMismatch+' skipped (existing shifts have different times)','warn');
     }
   } else {
-    // OFF · remove all active assignments for nurse on each selected day across any branch
+    // [Phase HR1c.4b.1c.1] OFF · START-DATE only · remove active assignments whose SHIFT START DATE equals
+    // the selected day. Yesterday's overnight (bleeds into today's morning) is NOT removed by today's OFF —
+    // admin must OFF May 1 to remove May 1's night shift, because May 1 is the start date.
     for(let i=0;i<sel.length;i++){
       const day = sel[i];
       if(prog){ prog.style.display='block'; prog.innerHTML='⏳ Processing day '+(i+1)+' of '+sel.length+' · '+day; }
       const allShiftsCur = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
       const allAssignsCur = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
-      const dayBefore = (typeof _addDaysISO==='function') ? _addDaysISO(day, -1) : day;
       const shiftIdsForDay = new Set();
       allShiftsCur.forEach(function(s){
         if(!s) return;
         if(ownBranchOnly && s.branch !== ownBranchOnly) return;
-        const sameDay = s.date === day;
-        const fromYesterday = s.date === dayBefore && (
-          (typeof _shiftIsOvernight==='function' && _shiftIsOvernight(s)) ||
-          (typeof _shiftIs24h==='function' && _shiftIs24h(s))
-        );
-        if(sameDay || fromYesterday) shiftIdsForDay.add(s.id);
+        if(s.date === day) shiftIdsForDay.add(s.id);
       });
       const targets = allAssignsCur.filter(function(a){
         return a && a.userId===nurseId && a.status!=='removed' && a.role==='nurse' && shiftIdsForDay.has(a.shiftId);
