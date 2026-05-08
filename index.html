@@ -12100,6 +12100,11 @@ function renderStaff(){
   .staff-tbl td .bdg { display: inline-flex; align-items: center; line-height: 1.2; }
   .staff-tbl td .btn { vertical-align: middle; }
   .staff-tbl td[dir="rtl"] { text-align: right; }
+  /* [Phase HR1c.5.3b] Horizontal-center all cell content · balanced data-grid appearance · overrides global th{text-align:left} (line 133) and HR1c.5.3a's RTL right-align */
+  .staff-tbl th { text-align: center; }
+  .staff-tbl td { text-align: center; }
+  .staff-tbl td[dir="rtl"] { text-align: center; }
+  .staff-tbl td .bdg { margin-left: auto; margin-right: auto; }
   @media (max-width:680px) {
     .staff-row { grid-template-columns:1fr; }
   }
