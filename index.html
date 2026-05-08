@@ -4222,6 +4222,7 @@ function getUsers() {
             branch: u.branch || 'all',
             facility: u.facility || 'HMC',
             active: u.active !== false,
+            staffId: u.staffId || u.staff_id || null, // [Phase HR1c.5.4b] Preserve users.staff_id linkage · prevents Data Hygiene "Linked to staff" from showing 0 when Supabase has linkages
           };
         }).filter(u => u.username);
       }
@@ -4239,9 +4240,10 @@ function saveUsers(arr){
   // Push the last-modified user (User Management UI calls saveUsers after each edit)
   if(Array.isArray(arr) && arr.length){
     const lastUser = arr[arr.length-1];
+    // [Phase HR1c.5.4b] Push staff_id linkage on user-edit save · prevents user-management UI from wiping HR1c.5.4a links
     const row = { id: lastUser.id, username: lastUser.username, password: lastUser.password,
                   name: lastUser.name, name_ar: lastUser.nameAr||null, role: lastUser.role,
-                  branch: lastUser.branch };
+                  branch: lastUser.branch, staff_id: lastUser.staffId || null };
     sbAPI('POST', 'users', row).catch(function(e){ console.warn('User sync failed:', e); });
   }
 }
