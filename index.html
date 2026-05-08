@@ -9859,13 +9859,14 @@ function renderCaseWizard(c,prefill,isClinic,isAdmin){
         +'</button>';
     }).join('')+'</div>';
 
-  // Shift banner — [Session #6 BUGFIX] include "Resume Workday" button when checked out
+  // [Phase HR1d.1a-hotfix] EH2 · removed legacy Resume Workday button from case-modal shift banner.
+  // Access is controlled exclusively by HR1d.1a gate (requireActiveShift). The case modal is gated
+  // via M5 checkShiftThenCase · this banner only renders for already-OK nurses or legacy edit paths.
   const activeShift=getMyActiveShift();
   const shiftBanner=isClinic?`
   <div style="background:${activeShift?'var(--grl)':'var(--redl)'};border:1px solid ${activeShift?'var(--gr)':'var(--red)'};border-radius:var(--ra);padding:8px 12px;margin-bottom:12px;display:flex;align-items:center;gap:8px;font-size:12px">
     <span>${activeShift?'🟢':'🔴'}</span>
-    <span style="color:${activeShift?'var(--gr)':'var(--red)'};font-weight:600;flex:1">${activeShift?`Dr. ${activeShift.doctorName||'—'} | Nurse: ${CU.name} | ${getBr(CU.branch).name} | Since ${activeShift.startTime?.slice(11,16)||'—'}`:'No active workday — اضغط Resume لاستئناف يومك'}</span>
-    ${!activeShift?'<button class="btn bp btn-sm" onclick="resumeMyWorkday()" style="font-size:11px;padding:4px 10px">▶ Resume Workday</button>':''}
+    <span style="color:${activeShift?'var(--gr)':'var(--red)'};font-weight:600;flex:1">${activeShift?`Dr. ${activeShift.doctorName||'—'} | Nurse: ${CU.name} | ${getBr(CU.branch).name} | Since ${activeShift.startTime?.slice(11,16)||'—'}`:'🔴 No active workday'}</span>
   </div>`:'';
 
   // Received transfer banner — shown when this case was transferred TO this branch
@@ -12977,23 +12978,27 @@ function renderShifts(){
         (isNurse && mine ? '<td><button class="btn brd btn-sm" onclick="endMyDay()">⏹ End My Day</button></td>' : (isNurse?'<td></td>':''))+
         '</tr>';
     }).join('')}</tbody></table></div>` : (function(){
-      // [Session #6 BUGFIX] If the current user is a tracked nurse with a checked-out
-      // workday for today, show a "Resume Workday" button instead of just "no one working".
+      // [Phase HR1d.1a-hotfix] EH1 · neutered legacy Resume/Start workday shortcuts.
+      // After HR1d.1a, access is controlled exclusively by:
+      //   today's roster · requireActiveShift() · Clock In Now · admin approval when needed.
+      // No legacy buttons may reopen or create workdays outside the gate.
       if(isNurse && typeof isWorkdayTrackedUser==='function' && isWorkdayTrackedUser()){
         const myToday = getWorkdays().find(function(w){
           return w.date===today && (w.userId===CU.id || w.staffName===CU.name);
         });
         if(myToday && myToday.checkedOutAt){
           const h = workdayHours(myToday);
+          // [Phase HR1d.1a-hotfix] Disabled message replaces ▶ Resume Workday button.
           return '<div style="padding:20px;text-align:center">'+
             '<div style="color:var(--g600);margin-bottom:10px">⏹ Your workday is checked out — '+fmtHours(h.hours)+' worked today.</div>'+
-            '<button class="btn bp btn-sm" onclick="resumeMyWorkday()">▶ Resume Workday</button>'+
+            '<div style="color:var(--g500);font-size:12px;font-style:italic;padding:6px 12px;background:var(--g50);border-radius:6px;display:inline-block">Shift ended. Contact admin for emergency coverage.</div>'+
             '</div>';
         }
         if(!myToday){
+          // [Phase HR1d.1a-hotfix] Disabled message replaces ▶ Start Today's Workday button.
           return '<div style="padding:20px;text-align:center">'+
             '<div style="color:var(--g600);margin-bottom:10px">No workday yet today.</div>'+
-            '<button class="btn bp btn-sm" onclick="resumeMyWorkday()">▶ Start Today\'s Workday</button>'+
+            '<div style="color:var(--g500);font-size:12px;font-style:italic;padding:6px 12px;background:var(--g50);border-radius:6px;display:inline-block">Start Shift is controlled by today’s roster. If you have a shift today, use Clock In Now from the attendance banner.</div>'+
             '</div>';
         }
       }
@@ -13079,17 +13084,13 @@ function endMyDay(){
 }
 window.endMyDay = endMyDay;
 
-// [Session #6 BUGFIX] Resume a checked-out workday OR start today's workday if missing.
-// Used by the Attendance page button when the user has logged out then needs to keep working.
+// [Phase HR1d.1a-hotfix] EH3 · resumeMyWorkday neutered to a safe no-op.
+// Function definition + window export retained so any orphan inline-onclick callsites
+// don't throw ReferenceError. Access is controlled exclusively by HR1d.1a gate · no
+// legacy reopen path. Future Extra Shift / Emergency Coverage will live in HR1d.x.
 function resumeMyWorkday(){
-  if(!isWorkdayTrackedUser()){ toast('Workday tracking not applicable for this role','warn'); return; }
-  const wd = ensureTodayWorkday(); // creates new OR reopens checked-out for today
-  if(wd){
-    toast('▶ Workday active — استأنفت يومك','ok');
-    nav('shifts');
-  } else {
-    toast('Failed to start workday','err');
-  }
+  if(typeof toast === 'function') toast('Shift ended. Contact admin for emergency coverage.', 'warn');
+  return null;
 }
 window.resumeMyWorkday = resumeMyWorkday;
 
