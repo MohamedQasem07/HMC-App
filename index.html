@@ -6237,7 +6237,9 @@ function _rosterExportCSV(){
 // Auto-migrates legacy 'month' → 'monthBranch' so existing users see no surprise.
 function _setSchedView(mode){
   let m;
+  // [Phase HR1c.6] 4-way view toggle · added 'monthDoctor' as 4th state.
   if(mode === 'monthNurse') m = 'monthNurse';
+  else if(mode === 'monthDoctor') m = 'monthDoctor';
   else if(mode === 'monthBranch' || mode === 'month') m = 'monthBranch';
   else m = 'day';
   try { localStorage.setItem('hmc_sched_view', m); } catch(e){}
@@ -6248,11 +6250,17 @@ function _setSchedView(mode){
   const monthMount = document.getElementById('schedRosterMount');
   const plannerMount = document.getElementById('schedPlannerMount');
   const plannerToolbar = document.getElementById('schedPlannerToolbar');
+  // [Phase HR1c.6] Doctor Planner mount + toolbar references.
+  const doctorPlannerMount = document.getElementById('schedDoctorPlannerMount');
+  const doctorPlannerToolbar = document.getElementById('schedDoctorPlannerToolbar');
   const dayBtn = document.getElementById('sv_day');
   const monthBranchBtn = document.getElementById('sv_month_branch');
   const monthNurseBtn  = document.getElementById('sv_month_nurse');
+  // [Phase HR1c.6] Doctor Planner toggle button.
+  const monthDoctorBtn = document.getElementById('sv_month_doctor');
   // Visibility toggles (any month-* mode shows month filters; sub-toolbars depend on specific mode)
-  const isMonthLike = (m==='monthBranch' || m==='monthNurse');
+  // [Phase HR1c.6] Extended isMonthLike to include monthDoctor.
+  const isMonthLike = (m==='monthBranch' || m==='monthNurse' || m==='monthDoctor');
   if(dayFilters)     dayFilters.style.display     = (m==='day') ? '' : 'none';
   if(monthFilters)   monthFilters.style.display   = isMonthLike ? '' : 'none';
   if(branchFilters)  branchFilters.style.display  = (m==='monthBranch') ? '' : 'none';
@@ -6260,21 +6268,31 @@ function _setSchedView(mode){
   if(monthMount)     monthMount.style.display     = (m==='monthBranch') ? '' : 'none';
   if(plannerMount)   plannerMount.style.display   = (m==='monthNurse') ? '' : 'none';
   if(plannerToolbar) plannerToolbar.style.display = (m==='monthNurse') ? '' : 'none';
+  // [Phase HR1c.6] Doctor Planner mount + toolbar visibility.
+  if(doctorPlannerMount)   doctorPlannerMount.style.display   = (m==='monthDoctor') ? '' : 'none';
+  if(doctorPlannerToolbar) doctorPlannerToolbar.style.display = (m==='monthDoctor') ? '' : 'none';
   if(dayBtn)          dayBtn.classList.toggle('btn-active', m==='day');
   if(monthBranchBtn)  monthBranchBtn.classList.toggle('btn-active', m==='monthBranch');
   if(monthNurseBtn)   monthNurseBtn.classList.toggle('btn-active', m==='monthNurse');
+  // [Phase HR1c.6] Doctor toggle active state.
+  if(monthDoctorBtn)  monthDoctorBtn.classList.toggle('btn-active', m==='monthDoctor');
   // Trigger appropriate render
   if(m==='monthBranch'){ if(typeof _rosterFilterChange==='function') _rosterFilterChange(); }
   else if(m==='monthNurse'){ if(typeof _plannerFilterChange==='function') _plannerFilterChange(); }
+  // [Phase HR1c.6] Doctor Planner render trigger.
+  else if(m==='monthDoctor'){ if(typeof _doctorPlannerFilterChange==='function') _doctorPlannerFilterChange(); }
   else { if(typeof _schedFilterChange==='function') _schedFilterChange(); }
 }
 function _getSchedView(){
   try {
     const v = localStorage.getItem('hmc_sched_view');
     if(v === 'monthNurse') return 'monthNurse';
+    // [Phase HR1c.6] Accept 'monthDoctor' as a valid persisted value.
+    if(v === 'monthDoctor') return 'monthDoctor';
     if(v === 'monthBranch' || v === 'month') return 'monthBranch';
     if(v === 'day') return 'day';
     // First-time user · no saved value · default to monthNurse per HR1c.4b.1b user direction
+    // [Phase HR1c.6] Q4 confirmed · Doctor Planner is NOT the default · monthNurse remains default.
     return v ? 'day' : 'monthNurse';
   } catch(e){ return 'day'; }
 }
@@ -7159,6 +7177,185 @@ function _plannerOpenPlan(staffId){
   openPlanMonthModal(staffId, null);
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// [Phase HR1c.6] Doctor Planner · read-only display
+// ═══════════════════════════════════════════════════════════════════════════
+// Parallel implementation to the Nurse Planner family. Doctors store coverage
+// directly on `shift_schedules.doctor_user_id` / `doctor_staff_id` columns
+// (NOT in `shift_assignments`), so reader logic is fundamentally different.
+//
+// HR1c.6 ships read-only display only:
+//   · D1 _doctorPlannerStaffRows       — all active doctors (Q1) + per-month flag
+//   · D2 _doctorPlannerShiftsByDate    — read shift_schedules.doctor_* directly
+//   · D3 _doctorPlannerBuildHTML       — table HTML (no Plan column · no onclick)
+//   · D4 _doctorPlannerRender          — mount into #schedDoctorPlannerMount
+//   · D5 _doctorPlannerFilterChange    — read #rostMonth · trigger render
+//
+// Write paths continue through existing Create/Edit Shift modals (cs_doctor /
+// es_doctor). Cell quick-edit deferred to HR1c.6.b. Print deferred to HR1c.6.c.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// [Phase HR1c.6] D1 · Build doctor planner rows · ALL active doctors per Q1.
+// Returns dual-key records `{id, staffId, userId, name, branch, homeBranchCode, source, linked, hasShiftsThisMonth}`.
+// Permission scope: head_nurse own-branch sees only doctors covering that branch · admin sees all.
+function _doctorPlannerStaffRows(monthYM){
+  if(!monthYM) return [];
+  const allDoctors = (typeof getActiveDoctors==='function') ? getActiveDoctors() : [];
+  const allShifts = (typeof _dedupeById==='function')
+    ? _dedupeById((typeof getShiftSchedules==='function') ? getShiftSchedules() : [])
+    : ((typeof getShiftSchedules==='function') ? getShiftSchedules() : []);
+  // Permission scope (mirrors _plannerStaffRows)
+  const hasAll = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
+  const ownBranchOnly = (typeof hasPerm==='function' && !hasAll && hasPerm('hr.shifts.schedule.ownBranch') && CU && CU.branch && CU.branch!=='all') ? CU.branch : null;
+  // Build the in-month shift index (filtered by permission)
+  const shiftsInMonth = allShifts.filter(function(s){
+    if(!s || !s.id || !s.date || s.status==='cancelled') return false;
+    if(!s.date.startsWith(monthYM)) return false;
+    if(ownBranchOnly && s.branch !== ownBranchOnly) return false;
+    return true;
+  });
+  // For permission scope filter: when head_nurse owns a branch, only show doctors who cover that branch this month
+  const visible = allDoctors.filter(function(d){
+    if(!d || d.active === false) return false;
+    if(!ownBranchOnly) return true; // admin sees all doctors
+    // head_nurse: only doctors covering own-branch shifts this month
+    return shiftsInMonth.some(function(s){
+      return (d.staffId && s.doctorStaffId === d.staffId) || (d.userId && s.doctorUserId === d.userId);
+    });
+  });
+  // Tag rows with hasShiftsThisMonth flag (for empty-state styling)
+  return visible.map(function(d){
+    const hasShifts = shiftsInMonth.some(function(s){
+      return (d.staffId && s.doctorStaffId === d.staffId) || (d.userId && s.doctorUserId === d.userId);
+    });
+    return {
+      id: d.staffId || d.userId,
+      staffId: d.staffId,
+      userId: d.userId,
+      name: d.name,
+      homeBranch: d.branch || '',
+      homeBranchCode: (typeof _branchCode==='function') ? _branchCode(d.branch || '') : '',
+      source: d.source,
+      linked: d.linked,
+      hasShiftsThisMonth: hasShifts
+    };
+  }).sort(function(a,b){ return (a.name||'').localeCompare(b.name||''); });
+}
+
+// [Phase HR1c.6] D2 · Read shift_schedules.doctor_* directly · with overnight roll-back.
+// Polymorphic input: string → both keyspaces (matches HR1c.5.5.2a-hotfix-2 idiom · disjoint namespaces).
+// Object input: `{staffId, userId}`.
+function _doctorPlannerShiftsByDate(staffIdOrIdentity, dateISO, allShifts){
+  if(!staffIdOrIdentity || !dateISO) return [];
+  const probe = (typeof staffIdOrIdentity === 'string')
+    ? { staffId: staffIdOrIdentity, userId: staffIdOrIdentity }
+    : { staffId: (staffIdOrIdentity && staffIdOrIdentity.staffId) || null, userId: (staffIdOrIdentity && staffIdOrIdentity.userId) || null };
+  const shifts = (typeof _dedupeById==='function') ? _dedupeById(allShifts || []) : (allShifts || []);
+  const hasAll = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
+  const ownBranchOnly = (typeof hasPerm==='function' && !hasAll && hasPerm('hr.shifts.schedule.ownBranch') && CU && CU.branch && CU.branch!=='all') ? CU.branch : null;
+  const dayBefore = (typeof _addDaysISO==='function') ? _addDaysISO(dateISO, -1) : dateISO;
+  const matching = shifts.filter(function(s){
+    if(!s || s.status==='cancelled') return false;
+    if(ownBranchOnly && s.branch !== ownBranchOnly) return false;
+    const isDoctor = (probe.staffId && s.doctorStaffId === probe.staffId) || (probe.userId && s.doctorUserId === probe.userId);
+    if(!isDoctor) return false;
+    const sameDay = s.date === dateISO;
+    const fromYesterday = s.date === dayBefore && (
+      (typeof _shiftIsOvernight==='function' && _shiftIsOvernight(s)) ||
+      (typeof _shiftIs24h==='function' && _shiftIs24h(s))
+    );
+    return sameDay || fromYesterday;
+  });
+  return matching.slice().sort(function(a,b){ return (a.startTime||'').localeCompare(b.startTime||''); });
+}
+
+// [Phase HR1c.6] D3 · Build full Doctor Planner table HTML · sticky staff column · NO Plan column · NO onclick (read-only Q2/Q3).
+function _doctorPlannerBuildHTML(monthYM){
+  const days = (typeof _rosterDayColumns==='function') ? _rosterDayColumns(monthYM) : [];
+  const staff = _doctorPlannerStaffRows(monthYM);
+  if(!days.length) return '<div class="card" style="padding:20px;text-align:center;color:var(--g500)">Invalid month</div>';
+  if(!staff.length) return '<div class="card" style="padding:20px;text-align:center;color:var(--g500)">No active doctors. Add doctors via Settings → Staff.</div>';
+  const allShifts = (typeof getShiftSchedules==='function') ? getShiftSchedules() : [];
+  // Header row
+  const headerCells = days.map(function(d){
+    return '<th class="planner-day-col"><div class="planner-dom">'+d.dom+'</div><div class="planner-dow">'+d.dow+'</div></th>';
+  }).join('');
+  const thead = '<thead><tr><th class="planner-staff-col">Doctor</th>'+headerCells+'</tr></thead>';
+  // Body rows
+  const tbody = '<tbody>'+staff.map(function(p){
+    const cells = days.map(function(d){
+      const shifts = _doctorPlannerShiftsByDate({staffId: p.staffId, userId: p.userId}, d.date, allShifts);
+      // Inline cell HTML · NO onclick (Q2 read-only · NOT calling _plannerCellHTML to avoid touching nurse code)
+      const safeStaff = String(p.id||'').replace(/'/g, "\\'");
+      const safeDate = String(d.date||'').replace(/'/g, "\\'");
+      if(!shifts || !shifts.length){
+        return '<td class="planner-cell planner-off" data-staff="'+safeStaff+'" data-date="'+safeDate+'"><div class="planner-cell-off-text">OFF</div></td>';
+      }
+      const statusClsOf = function(s){
+        if(s.status==='cancelled') return 'planner-status-cancelled';
+        if(s.status==='published') return 'planner-status-published';
+        return 'planner-status-planned';
+      };
+      const overnightClsOf = function(s){
+        const is24h = (typeof _shiftIs24h==='function') ? _shiftIs24h(s) : false;
+        const isOvernight = (typeof _shiftIsOvernight==='function') ? _shiftIsOvernight(s) : false;
+        if(is24h) return ' planner-24h';
+        if(isOvernight) return ' planner-overnight';
+        return '';
+      };
+      if(shifts.length === 1){
+        const s = shifts[0];
+        const code = (typeof _branchCode==='function') ? _branchCode(s.branch) : s.branch;
+        const lbl = (typeof _plannerCompactTimeLabel==='function') ? _plannerCompactTimeLabel(s) : ((s.startTime||'?')+'–'+(s.endTime||'?'));
+        const cls = statusClsOf(s) + overnightClsOf(s);
+        return '<td class="planner-cell '+cls+'" data-staff="'+safeStaff+'" data-date="'+safeDate+'">'+
+          '<div class="planner-cell-branch">'+code+'</div>'+
+          '<div class="planner-cell-time">'+lbl+'</div>'+
+          '</td>';
+      }
+      // Multi-shift stack
+      const stack = shifts.map(function(s){
+        const code = (typeof _branchCode==='function') ? _branchCode(s.branch) : s.branch;
+        const lbl = (typeof _plannerCompactTimeLabel==='function') ? _plannerCompactTimeLabel(s) : ((s.startTime||'?')+'–'+(s.endTime||'?'));
+        return '<div class="planner-stack '+statusClsOf(s)+'"><div class="planner-cell-branch">'+code+'</div><div class="planner-cell-time">'+lbl+'</div></div>';
+      }).join('<div class="planner-stack-sep"></div>');
+      return '<td class="planner-cell planner-multi" data-staff="'+safeStaff+'" data-date="'+safeDate+'">'+stack+'</td>';
+    }).join('');
+    const homeBadge = p.homeBranchCode ? ' <span style="font-size:9px;color:var(--g500);font-weight:400">(home: '+p.homeBranchCode+')</span>' : '';
+    return '<tr><td class="planner-staff-col">👨‍⚕️ '+(p.name||p.id)+homeBadge+'</td>'+cells+'</tr>';
+  }).join('')+'</tbody>';
+  return '<table class="planner">'+thead+tbody+'</table>';
+}
+
+// [Phase HR1c.6] D4 · Mount Doctor Planner into #schedDoctorPlannerMount.
+function _doctorPlannerRender(monthYM){
+  const mount = document.getElementById('schedDoctorPlannerMount');
+  if(!mount) return;
+  mount.innerHTML = _doctorPlannerBuildHTML(monthYM);
+  const statsEl = document.getElementById('schedStats');
+  if(statsEl){
+    const days = (typeof _rosterDayColumns==='function') ? _rosterDayColumns(monthYM) : [];
+    const staff = _doctorPlannerStaffRows(monthYM);
+    statsEl.innerHTML = '👨‍⚕️ '+staff.length+' doctor'+(staff.length===1?'':'s')+' · '+days.length+' days';
+  }
+}
+
+// [Phase HR1c.6] D5 · Read #rostMonth · trigger Doctor Planner render.
+function _doctorPlannerFilterChange(){
+  const monthEl = document.getElementById('rostMonth');
+  const today = new Date();
+  const defaultMonth = today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0');
+  const monthYM = (monthEl && monthEl.value) ? monthEl.value : defaultMonth;
+  _doctorPlannerRender(monthYM);
+}
+
+// [Phase HR1c.6] Window exports · doctor planner family.
+window._doctorPlannerStaffRows     = _doctorPlannerStaffRows;
+window._doctorPlannerShiftsByDate  = _doctorPlannerShiftsByDate;
+window._doctorPlannerBuildHTML     = _doctorPlannerBuildHTML;
+window._doctorPlannerRender        = _doctorPlannerRender;
+window._doctorPlannerFilterChange  = _doctorPlannerFilterChange;
+
 // [Phase HR1c.4b.1b] Plan Month modal · same .mbd/.modal/.mhdr/.mbody HR1c.2a-compatible classes.
 function _schedRenderPlanMonthModal(){
   const allowed = (typeof _schedAllowedBranches==='function') ? _schedAllowedBranches() : [];
@@ -7904,10 +8101,12 @@ function renderSchedulesPage(){
   <div class="card" style="margin-bottom:14px;padding:14px">
     <div class="ch" style="margin-bottom:10px"><div class="ct">🗓️ Shift Scheduling — جدولة المناوبات</div></div>
     <!-- [Phase HR1c.4b.1b] 3-way view toggle: Day / Month-Branch / Month-Nurse-Planner · persisted in localStorage -->
+    <!-- [Phase HR1c.6] 4th view toggle: 👨‍⚕️ Month — Doctor Planner · same permission gate as Nurse Planner -->
     <div style="display:flex;gap:6px;margin-bottom:10px;flex-wrap:wrap">
       <button class="btn bs btn-sm" id="sv_day"          onclick="_setSchedView('day')">📅 Day</button>
       <button class="btn bs btn-sm" id="sv_month_branch" onclick="_setSchedView('monthBranch')">🗓️ Month — Branch</button>
       <button class="btn bs btn-sm" id="sv_month_nurse"  onclick="_setSchedView('monthNurse')">👥 Month — Nurse Planner</button>
+      ${(typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule')||hasPerm('hr.shifts.schedule.ownBranch')))?`<button class="btn bs btn-sm" id="sv_month_doctor" onclick="_setSchedView('monthDoctor')">👨‍⚕️ Month — Doctor Planner</button>`:''}
     </div>
     <!-- Day filters (existing · unchanged) -->
     <div id="sched_day_filters" style="display:flex;gap:12px;flex-wrap:wrap;align-items:center">
@@ -7937,6 +8136,10 @@ function renderSchedulesPage(){
         <span style="font-size:11px;color:var(--g600);align-self:center"><strong>All Clinics</strong> · nurse-centric planner</span>
         ${(typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule')||hasPerm('hr.shifts.schedule.ownBranch')))?`<button class="btn bs btn-sm" onclick="openAddNurseToPlannerModal()">👥 + Add Nurse to Planner</button><button class="btn bs btn-sm" onclick="_plannerPrint()">🖨 Print</button>`:''}
       </div>
+      <!-- [Phase HR1c.6] Doctor Planner toolbar · placeholder · empty in HR1c.6 (write/print deferred to HR1c.6.b/.c) -->
+      <div id="schedDoctorPlannerToolbar" style="display:none;gap:6px;flex-wrap:wrap;align-items:flex-end">
+        <span style="font-size:11px;color:var(--g600);align-self:center"><strong>All Clinics</strong> · doctor coverage planner · read-only</span>
+      </div>
       <div style="flex:1;min-width:200px" id="schedStats"></div>
     </div>
   </div>
@@ -7946,6 +8149,8 @@ function renderSchedulesPage(){
   <div id="schedRosterMount" class="rost-wrap" style="display:none"></div>
   <!-- [Phase HR1c.4b.1b] Nurse Planner grid mount · hidden by default · _setSchedView toggles visibility -->
   <div id="schedPlannerMount" class="rost-wrap" style="display:none"></div>
+  <!-- [Phase HR1c.6] Doctor Planner grid mount · hidden by default · _setSchedView toggles visibility -->
+  <div id="schedDoctorPlannerMount" class="rost-wrap" style="display:none"></div>
   ${_schedRenderCreateModal()}
   ${_schedRenderAddStaffModal()}
   ${/* [Phase HR1c.2b] Edit Shift modal · sibling of Create + Add Staff modals */ _schedRenderEditModal()}
@@ -7956,9 +8161,11 @@ function renderSchedulesPage(){
 }
 
 // [Phase HR1c.4b.1b] Month change handler · routes to the active view's filter function.
+// [Phase HR1c.6] Extended to route to _doctorPlannerFilterChange when monthDoctor mode is active.
 function _schedMonthChange(){
   const mode = (typeof _getSchedView==='function') ? _getSchedView() : 'day';
   if(mode === 'monthNurse'){ if(typeof _plannerFilterChange==='function') _plannerFilterChange(); }
+  else if(mode === 'monthDoctor'){ if(typeof _doctorPlannerFilterChange==='function') _doctorPlannerFilterChange(); }
   else { if(typeof _rosterFilterChange==='function') _rosterFilterChange(); }
 }
 window._schedMonthChange = _schedMonthChange;
