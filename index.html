@@ -21428,6 +21428,8 @@ window._userStaffOptions = _userStaffOptions;
 
 // [Phase HR1c.5.4e] H4 · Triggered by role <select> onchange · re-populate staff dropdown with allowed groups.
 //   Preserves current staff selection if it's still valid for the new role · clears it otherwise.
+// [Phase HR1c.5.4e-ux-hotfix] UX5 · After role change, also toggle the "Select from Staff first..." helper
+//   visibility and re-apply lock state on name fields (lock for required-link · unlock for optional-link).
 function _userRoleChanged(){
   const roleEl = document.getElementById('uf_role');
   const staffEl = document.getElementById('uf_staff');
@@ -21443,35 +21445,83 @@ function _userRoleChanged(){
     staffEl.value = '';
   }
   // Refresh the required-link hint.
+  const required = (typeof _USER_REQUIRED_LINK_ROLES!=='undefined') && _USER_REQUIRED_LINK_ROLES.has(role);
   const hintEl = document.getElementById('uf_staff_hint');
   if(hintEl){
-    const required = _USER_REQUIRED_LINK_ROLES.has(role);
     hintEl.textContent = required
       ? 'Required for ' + role + ' users · pick the matching Staff record.'
       : 'Optional for ' + role + ' · leave blank to skip linkage.';
     hintEl.style.color = required ? '#b91c1c' : '#64748b';
   }
+  // [Phase HR1c.5.4e-ux-hotfix] UX4 · Toggle "Select from Staff first..." primary helper visibility.
+  const primaryHintEl = document.getElementById('uf_staff_primary_hint');
+  if(primaryHintEl) primaryHintEl.style.display = required ? '' : 'none';
+  // [Phase HR1c.5.4e-ux-hotfix] UX5 · Re-apply lock state · _userStaffPicked covers both branches:
+  //   - Required + has pick → lock + always overwrite
+  //   - Required + no pick → unlock + clear badge
+  //   - Optional + any state → unlock + don't overwrite
+  if(typeof _userStaffPicked === 'function') _userStaffPicked();
 }
 window._userRoleChanged = _userRoleChanged;
 
-// [Phase HR1c.5.4e] H5 · Triggered by staff <select> onchange · auto-fill name + branch (S6/U8 + Q2).
-//   - Name (EN) auto-fills only if currently empty (Q2 default · don't override admin choice).
-//   - Name (AR) auto-fills only if currently empty.
-//   - Branch auto-fills only if currently 'all' (Q7 · don't override manual admin choice).
+// [Phase HR1c.5.4e] H5 · Triggered by staff <select> onchange · auto-fill name + branch.
+// [Phase HR1c.5.4e-ux-hotfix] UX2/UX3/L5 · Staff is source of truth for required-link roles.
+//   - Required-link (doctor/nurse/head_nurse/hr_manager/lab/driver/accountant):
+//     · ALWAYS overwrite name (EN/AR) + branch from staff record (even if name was already typed)
+//     · Apply readOnly + greyed style to name fields with tooltip "Locked to Staff record · edit Staff to change"
+//     · Show "🔄 synced from Staff" badge after sync
+//   - Optional-link (admin/manager/reception):
+//     · Keep "fill only if empty/all" behavior (admin retains manual control)
+//     · No lock on name fields
+//   - Cleared selection (blank) for required-link role: unlock name fields · clear synced badge.
 function _userStaffPicked(){
   const staffEl = document.getElementById('uf_staff');
   if(!staffEl) return;
+  const roleEl = document.getElementById('uf_role');
+  const role = roleEl ? roleEl.value : '';
+  const isRequired = (typeof _USER_REQUIRED_LINK_ROLES !== 'undefined') && _USER_REQUIRED_LINK_ROLES.has(role);
   const opt = staffEl.selectedOptions && staffEl.selectedOptions[0];
-  if(!opt || !opt.value) return;
-  const ds = opt.dataset || {};
+  const hasPick = !!(opt && opt.value);
+  const ds = opt ? (opt.dataset || {}) : {};
   const nameEl = document.getElementById('uf_name');
   const nameArEl = document.getElementById('uf_nameAr');
   const branchEl = document.getElementById('uf_branch');
-  if(nameEl && !nameEl.value && ds.name) nameEl.value = ds.name;
-  if(nameArEl && !nameArEl.value && ds.nameAr) nameArEl.value = ds.nameAr;
-  if(branchEl && branchEl.value === 'all' && ds.homeBranch){
-    const opt2 = branchEl.querySelector('option[value="'+(ds.homeBranch||'').replace(/"/g,'&quot;')+'"]');
-    if(opt2) branchEl.value = ds.homeBranch;
+  const badgeEl = document.getElementById('uf_synced_badge');
+  // [Phase HR1c.5.4e-ux-hotfix] When staff is cleared, unlock fields for required-link · clear badge.
+  if(!hasPick){
+    if(isRequired){
+      if(nameEl){ nameEl.readOnly = false; nameEl.style.background = ''; nameEl.title = ''; }
+      if(nameArEl){ nameArEl.readOnly = false; nameArEl.style.background = ''; nameArEl.title = ''; }
+    }
+    if(badgeEl) badgeEl.style.display = 'none';
+    return;
+  }
+  // [Phase HR1c.5.4e-ux-hotfix] UX3 · Required-link → always overwrite · Optional-link → only if empty/all.
+  if(isRequired){
+    if(nameEl && ds.name) nameEl.value = ds.name;
+    if(nameArEl && ds.nameAr) nameArEl.value = ds.nameAr;
+    // [Phase HR1c.5.4e-ux-hotfix] L5 · Branch ALWAYS overwrites for required-link (was: only when 'all').
+    if(branchEl && ds.homeBranch){
+      const opt2 = branchEl.querySelector('option[value="'+(ds.homeBranch||'').replace(/"/g,'&quot;')+'"]');
+      if(opt2) branchEl.value = ds.homeBranch;
+    }
+    // [Phase HR1c.5.4e-ux-hotfix] UX2 · Lock name fields with greyed bg + tooltip per Q1.
+    const lockTip = 'Locked to Staff record · edit Staff to change';
+    if(nameEl){ nameEl.readOnly = true; nameEl.style.background = '#f1f5f9'; nameEl.title = lockTip; }
+    if(nameArEl){ nameArEl.readOnly = true; nameArEl.style.background = '#f1f5f9'; nameArEl.title = lockTip; }
+    if(badgeEl) badgeEl.style.display = '';
+  } else {
+    // Optional-link path · preserve original "only if empty/all" behavior · NO lock.
+    if(nameEl && !nameEl.value && ds.name) nameEl.value = ds.name;
+    if(nameArEl && !nameArEl.value && ds.nameAr) nameArEl.value = ds.nameAr;
+    if(branchEl && branchEl.value === 'all' && ds.homeBranch){
+      const opt2 = branchEl.querySelector('option[value="'+(ds.homeBranch||'').replace(/"/g,'&quot;')+'"]');
+      if(opt2) branchEl.value = ds.homeBranch;
+    }
+    // Optional-link does not lock fields · ensure readOnly cleared in case role was just flipped.
+    if(nameEl){ nameEl.readOnly = false; nameEl.style.background = ''; nameEl.title = ''; }
+    if(nameArEl){ nameArEl.readOnly = false; nameArEl.style.background = ''; nameArEl.title = ''; }
+    if(badgeEl) badgeEl.style.display = 'none';
   }
 }
 window._userStaffPicked = _userStaffPicked;
@@ -21529,6 +21579,30 @@ function _userOpenForm(existing){
   const legacyWarn = (isEdit && !u.staffId)
     ? '<div style="background:#fef3c7;color:#7c2d12;padding:6px 10px;border-radius:6px;font-size:11px;margin-top:4px">⚠️ Legacy user without staff link · pick a Staff record to enable HR/payroll integration.</div>'
     : '';
+  // [Phase HR1c.5.4e-ux-hotfix] Q3 · Sync names from Staff on Edit form open · required-link only.
+  //   Staff is source of truth · re-sync canonical name from staff record so admin sees current truth.
+  //   If staff record can't be found, keep existing user.name / user.nameAr (silent fallback).
+  let displayName = u.name;
+  let displayNameAr = u.nameAr || '';
+  let openSyncedFromStaff = false;
+  if(isEdit && isLinkRequired && initialStaffId && typeof getStaff === 'function'){
+    const sRec = getStaff().find(function(x){ return x && x.id === initialStaffId; });
+    if(sRec){
+      const staffNameEn = sRec.name || sRec.fullNameEn || u.name;
+      const staffNameAr = sRec.fullNameAr || sRec.nameAr || u.nameAr || '';
+      if((staffNameEn && staffNameEn !== u.name) || (staffNameAr && staffNameAr !== u.nameAr)){
+        displayName = staffNameEn;
+        displayNameAr = staffNameAr;
+        openSyncedFromStaff = true;
+      }
+    }
+  }
+  // [Phase HR1c.5.4e-ux-hotfix] UX2 · Initial lock state · required-link with picked staff renders readonly.
+  const initialLocked = isLinkRequired && !!initialStaffId;
+  const _lockTip = 'Locked to Staff record · edit Staff to change';
+  const nameAttr = initialLocked ? `readonly title="${_lockTip}" style="background:#f1f5f9"` : '';
+  // [Phase HR1c.5.4e-ux-hotfix] UX4 · Primary helper text visible only when role is required-link.
+  const primaryHintStyle = isLinkRequired ? '' : 'display:none';
   const html = `<div id="userFormOvl" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10020;display:flex;align-items:center;justify-content:center" onclick="if(event.target===this)this.remove()">
     <div style="background:#fff;border-radius:10px;width:480px;max-height:90vh;overflow-y:auto;padding:18px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
@@ -21540,12 +21614,7 @@ function _userOpenForm(existing){
           <input id="uf_username" class="fsi" value="${u.username}" ${isEdit?'disabled':''} placeholder="e.g. nurse_ahmed"></div>
         ${!isEdit?`<div><label style="font-size:12px;color:#64748b">Password *</label>
           <input id="uf_password" class="fsi" type="password" placeholder="Minimum 6 characters"></div>`:''}
-        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
-          <div><label style="font-size:12px;color:#64748b">Full Name (EN) *</label>
-            <input id="uf_name" class="fsi" value="${u.name}" placeholder="e.g. Dr. Ahmed Sayed"></div>
-          <div><label style="font-size:12px;color:#64748b">الاسم بالعربي</label>
-            <input id="uf_nameAr" class="fsi" value="${u.nameAr||''}" placeholder="مثلاً: د. أحمد سيد"></div>
-        </div>
+        <!-- [Phase HR1c.5.4e-ux-hotfix] UX1 · Role + Facility moved BEFORE Linked Staff + Name fields. -->
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           <div><label style="font-size:12px;color:#64748b">Role *</label>
             <select id="uf_role" class="fsi" onchange="_userRoleChanged()">
@@ -21557,21 +21626,32 @@ function _userOpenForm(existing){
               <option value="SMC" ${u.facility==='SMC'?'selected':''}>SMC — Sahl Hasheesh Medical Centre</option>
             </select></div>
         </div>
+        <!-- [Phase HR1c.5.4e-ux-hotfix] UX1+UX4 · Linked Staff is now PRIMARY · placed above Name fields with primary helper text. -->
+        <div>
+          <label style="font-size:12px;color:#64748b">Linked Staff${isLinkRequired?' *':''}</label>
+          <select id="uf_staff" class="fsi" data-user-id="${initialUserId||''}" onchange="_userStaffPicked()">
+            ${staffOptsInitial}
+          </select>
+          <div id="uf_staff_primary_hint" style="font-size:11px;margin-top:3px;color:#0369a1;font-weight:500;${primaryHintStyle}">ℹ️ Select from Staff first; name and branch will auto-fill.</div>
+          <div id="uf_staff_hint" style="font-size:11px;margin-top:3px;color:${linkHintColor}">${linkHintText}</div>
+          ${legacyWarn}
+        </div>
+        <!-- [Phase HR1c.5.4e-ux-hotfix] UX2 · Name fields render readonly when initialLocked · "🔄 synced from Staff" badge if Q3 sync triggered. -->
+        <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
+          <div>
+            <label style="font-size:12px;color:#64748b">Full Name (EN) *
+              <span id="uf_synced_badge" style="font-size:10px;color:#0369a1;background:#e0f2fe;padding:1px 6px;border-radius:8px;margin-left:6px;${(initialLocked || openSyncedFromStaff)?'':'display:none'}">🔄 synced from Staff</span>
+            </label>
+            <input id="uf_name" class="fsi" value="${displayName}" ${nameAttr} placeholder="e.g. Dr. Ahmed Sayed"></div>
+          <div><label style="font-size:12px;color:#64748b">الاسم بالعربي</label>
+            <input id="uf_nameAr" class="fsi" value="${displayNameAr}" ${nameAttr} placeholder="مثلاً: د. أحمد سيد"></div>
+        </div>
         <div><label style="font-size:12px;color:#64748b">Branch / Clinic *</label>
           <select id="uf_branch" class="fsi">
             <option value="all" ${u.branch==='all'?'selected':''}>🌐 All Branches (admin / reception only)</option>
             ${branches.map(b=>`<option value="${b.id}" ${u.branch===b.id?'selected':''}>${b.type==='main'?'🏥':'🏨'} ${b.name}</option>`).join('')}
           </select>
           <div style="font-size:11px;color:#64748b;margin-top:3px">User can ONLY access cases at this branch (admin/reception bypass this).</div>
-        </div>
-        <!-- [Phase HR1c.5.4e] U2 · Linked Staff selector · filtered by role · auto-fills name+branch via _userStaffPicked -->
-        <div>
-          <label style="font-size:12px;color:#64748b">Linked Staff${isLinkRequired?' *':''}</label>
-          <select id="uf_staff" class="fsi" data-user-id="${initialUserId||''}" onchange="_userStaffPicked()">
-            ${staffOptsInitial}
-          </select>
-          <div id="uf_staff_hint" style="font-size:11px;margin-top:3px;color:${linkHintColor}">${linkHintText}</div>
-          ${legacyWarn}
         </div>
         <label style="display:flex;align-items:center;gap:8px;font-size:13px;background:#f8fafc;padding:10px;border-radius:6px;cursor:pointer">
           <input type="checkbox" id="uf_active" ${u.active!==false?'checked':''}>
