@@ -8299,10 +8299,19 @@ function _schedRenderCreateModal(){
   const branchOpts = (isOwnBranchOnly
     ? '<option value="'+CU.branch+'">'+(getBr(CU.branch).name||CU.branch)+'</option>'
     : allowed.map(function(bid){ return '<option value="'+bid+'">'+getBr(bid).name+'</option>'; }).join(''));
-  // Doctor picker — getStaff().filter(role==='Doctor') primary · HMC_DOCTORS fallback (D1 decision)
-  const staffDocs = (typeof getStaff==='function')?getStaff().filter(function(s){return s.role==='Doctor';}):[];
-  const docNames = staffDocs.length ? staffDocs.map(function(d){return {id:d.id,name:d.name};}) : (typeof HMC_DOCTORS!=='undefined'?HMC_DOCTORS.map(function(n){return {id:n,name:n};}):[]);
-  const docOpts = '<option value="">— None —</option>' + docNames.map(function(d){ return '<option value="'+d.id+'">'+d.name+'</option>'; }).join('');
+  // [Phase HR1c.6c-write-fix] W1 · Doctor picker via getActiveDoctors() · cleaned source-of-truth (HR1c.6a contract).
+  //   Replaces buggy Title-Case `s.role === 'Doctor'` filter (matched NOTHING in production) + HMC_DOCTORS legacy
+  //   fallback that stored fake user IDs in `shift_schedules.doctor_user_id`. Output options carry dual-key data
+  //   attrs (`data-staff-id`/`data-user-id`/`data-name`) · stable id `staffId||userId` · saveShiftSchedule reads
+  //   the data attrs (not just the value) to write both doctorUserId + doctorStaffId correctly.
+  const docs = (typeof getActiveDoctors==='function') ? getActiveDoctors() : [];
+  const docOpts = '<option value="">— None —</option>' + docs.map(function(d){
+    const stableId = (d.staffId || d.userId || '').replace(/"/g,'&quot;');
+    const sId = (d.staffId || '').replace(/"/g,'&quot;');
+    const uId = (d.userId  || '').replace(/"/g,'&quot;');
+    const nm  = (d.name    || '').replace(/"/g,'&quot;');
+    return '<option value="'+stableId+'" data-staff-id="'+sId+'" data-user-id="'+uId+'" data-name="'+nm+'">'+nm+'</option>';
+  }).join('');
   // [Phase HR1c.5.5.2b] Nurse multi-select via getActiveNurses() · staff is HR truth · users is fallback for unlinked.
   const nurses = (typeof getActiveNurses==='function') ? getActiveNurses() : [];
   const today = new Date().toISOString().split('T')[0];
@@ -8378,10 +8387,19 @@ function _schedRenderAddStaffModal(){
 // Locked = branch / date / shift_type (they're part of the stable id `SS-{branch}-{YYYYMMDD}-{type}`).
 // Same .modal/.mhdr/.mbody classes as Create modal (HR1c.2a fix).
 function _schedRenderEditModal(){
-  // Doctor options use the same Staff catalog → HMC_DOCTORS fallback as Create modal.
-  const staffDocs = (typeof getStaff==='function')?getStaff().filter(function(s){return s.role==='Doctor';}):[];
-  const docNames = staffDocs.length ? staffDocs.map(function(d){return {id:d.id,name:d.name};}) : (typeof HMC_DOCTORS!=='undefined'?HMC_DOCTORS.map(function(n){return {id:n,name:n};}):[]);
-  const docOpts = '<option value="">— None —</option>' + docNames.map(function(d){ return '<option value="'+d.id+'">'+d.name+'</option>'; }).join('');
+  // [Phase HR1c.6c-write-fix] W2 · Doctor picker via getActiveDoctors() · cleaned source-of-truth (HR1c.6a contract).
+  //   Same dual-key data attrs as W1 (Create modal). Legacy-preservation: if the shift currently has an old
+  //   HMC_DOCTORS legacy string in `doctorUserId` (or any value not present in getActiveDoctors()), openEditShiftModal
+  //   prepends an extra <option value="<legacyValue>" disabled selected> tagged "(legacy)" so the dropdown can
+  //   represent the existing state without rewriting it. New selections from the live list write dual-key correctly.
+  const docs = (typeof getActiveDoctors==='function') ? getActiveDoctors() : [];
+  const docOpts = '<option value="">— None —</option>' + docs.map(function(d){
+    const stableId = (d.staffId || d.userId || '').replace(/"/g,'&quot;');
+    const sId = (d.staffId || '').replace(/"/g,'&quot;');
+    const uId = (d.userId  || '').replace(/"/g,'&quot;');
+    const nm  = (d.name    || '').replace(/"/g,'&quot;');
+    return '<option value="'+stableId+'" data-staff-id="'+sId+'" data-user-id="'+uId+'" data-name="'+nm+'">'+nm+'</option>';
+  }).join('');
   return `
   <div class="mbd" id="editShiftModal">
     <div class="modal" style="max-width:520px;width:92vw;max-height:90vh;overflow:auto">
@@ -8464,7 +8482,31 @@ function openEditShiftModal(shiftId){
   if(startEl) startEl.value = (shift.startTime||'').substring(0,5);
   if(endEl)   endEl.value   = (shift.endTime||'').substring(0,5);
   const docEl = document.getElementById('es_doctor');
-  if(docEl) docEl.value = shift.doctorUserId || '';
+  // [Phase HR1c.6c-write-fix] W2 · Legacy-preservation: if the shift's stored doctorUserId is NOT in the
+  //   live getActiveDoctors() list (e.g. an old HMC_DOCTORS string from pre-fix Create/Edit), inject a
+  //   single disabled "(legacy)" option marked [data-legacy="1"] so the dropdown reflects current state
+  //   without rewriting it. User picks a real doctor from the live list to migrate · saveShiftEdit reads
+  //   data attrs (which the legacy option lacks) so picking '— None —' or a real doctor writes dual-key.
+  if(docEl){
+    const priorDoc = shift.doctorUserId || '';
+    if(priorDoc){
+      const liveDocs = (typeof getActiveDoctors==='function') ? getActiveDoctors() : [];
+      const matched = liveDocs.some(function(d){ return (d.staffId === priorDoc) || (d.userId === priorDoc); });
+      if(!matched){
+        // Strip any pre-existing legacy option (e.g. on re-open after model selection change)
+        const stale = docEl.querySelector('option[data-legacy="1"]');
+        if(stale) stale.parentNode.removeChild(stale);
+        const legacyOpt = document.createElement('option');
+        legacyOpt.value = priorDoc;
+        legacyOpt.textContent = priorDoc + ' (legacy)';
+        legacyOpt.setAttribute('data-legacy', '1');
+        // Insert right after the "— None —" option (index 0) so the legacy entry is visible at top.
+        if(docEl.options.length > 0) docEl.insertBefore(legacyOpt, docEl.options[1] || null);
+        else docEl.appendChild(legacyOpt);
+      }
+    }
+    docEl.value = priorDoc;
+  }
   const notesEl = document.getElementById('es_notes');
   if(notesEl) notesEl.value = shift.notes || '';
   // Stash locked context for the hint helper + save handler
@@ -8500,7 +8542,20 @@ async function saveShiftEdit(shiftId){
   // Read editable fields
   const startTime = (document.getElementById('es_start')?.value||'').trim();
   const endTime   = (document.getElementById('es_end')?.value||'').trim();
-  const newDoctor = (document.getElementById('es_doctor')?.value||'').trim();
+  // [Phase HR1c.6c-write-fix] W4 · Read doctor identity from picker source-of-truth (HR1c.6c W2).
+  //   The selected <option> may be:
+  //     · '— None —' (value="") → no doctor
+  //     · A live getActiveDoctors() option carrying data-staff-id / data-user-id / data-name (pick the dual-key)
+  //     · A legacy preservation option [data-legacy="1"] with NO data attrs (kept as-is to avoid silent rewrites)
+  //   When the user keeps a legacy option, we preserve `doctorUserId = priorDoc` and clear `doctorStaffId`
+  //   (since the legacy string is not a real id). When the user picks a real doctor, we always-both-keys write.
+  const docSelEl = document.getElementById('es_doctor');
+  const docSelOpt = (docSelEl && docSelEl.selectedOptions && docSelEl.selectedOptions[0]) ? docSelEl.selectedOptions[0] : null;
+  const newDoctor = (docSelEl?.value||'').trim();
+  const isLegacyKept = !!(docSelOpt && docSelOpt.getAttribute && docSelOpt.getAttribute('data-legacy') === '1');
+  const docPickedStaffId = (!isLegacyKept && docSelOpt && docSelOpt.dataset) ? (docSelOpt.dataset.staffId || '') : '';
+  const docPickedUserId  = (!isLegacyKept && docSelOpt && docSelOpt.dataset) ? (docSelOpt.dataset.userId  || '') : '';
+  const docPickedName    = (!isLegacyKept && docSelOpt && docSelOpt.dataset) ? (docSelOpt.dataset.name    || '') : '';
   const newNotes  = (document.getElementById('es_notes')?.value||'').trim().substring(0,400);
   if(!startTime || !endTime){ if(typeof toast==='function') toast('Start + end times required','err'); return; }
   // Build updated row · keep id/branch/date/shiftType/status/createdBy/createdAt
@@ -8508,45 +8563,54 @@ async function saveShiftEdit(shiftId){
   const updated = Object.assign({}, prior, {
     startTime: startTime+(startTime.length===5?':00':''),
     endTime:   endTime+(endTime.length===5?':00':''),
-    doctorUserId: newDoctor || null,
-    doctorStaffId: newDoctor && (typeof _resolveStaffIdForUser==='function') ? _resolveStaffIdForUser(newDoctor) : null, // [Phase HR1c.5.4] dual-write
+    // [Phase HR1c.6c-write-fix] W4 · Always-both-keys dual-write from picker data attrs (W2 source).
+    //   When user keeps the legacy '(legacy)' option, isLegacyKept=true · we preserve doctorUserId verbatim
+    //   and clear doctorStaffId (since the legacy string is not a real id). When user picks a real doctor,
+    //   data attrs from W2 supply both keys. When user picks '— None —', newDoctor is empty → both null.
+    doctorUserId:  newDoctor ? (isLegacyKept ? newDoctor : (docPickedUserId  || null)) : null,
+    doctorStaffId: newDoctor ? (isLegacyKept ? null      : (docPickedStaffId || null)) : null,
     notes: newNotes || null,
     updatedAt: nowISO
   });
   all[idx] = updated;
   if(typeof saveShiftSchedules==='function') saveShiftSchedules(all);
   await _pushShiftSchedule(updated);
-  // Doctor-assignment hygiene
+  // [Phase HR1c.6c-write-fix] W4 · Doctor-assignment hygiene with dual-key removal + add.
+  //   `oldDoctor` is whatever was previously stored in `doctorUserId` (could be a real userId, a real
+  //   staffId-as-stableId from post-W3 writes, or a legacy HMC_DOCTORS string). Removal predicate matches
+  //   on EITHER `userId` OR `staffId` so legacy + new + dual-key rows all get cleared. New addition uses
+  //   the W4 picker source (data attrs) and passes the polymorphic identity object to addShiftAssignment.
   const oldDoctor = prior.doctorUserId || '';
-  if(oldDoctor && oldDoctor !== newDoctor){
-    // Soft-remove the old doctor's assignment row (if any active row exists)
+  const oldDoctorStaff = prior.doctorStaffId || '';
+  const docChanged = (oldDoctor !== newDoctor) || (oldDoctorStaff !== (updated.doctorStaffId || ''));
+  if((oldDoctor || oldDoctorStaff) && docChanged){
     const allAssigns = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
-    const aIdx = allAssigns.findIndex(function(a){ return a.shiftId===shiftId && a.userId===oldDoctor && a.role==='doctor' && a.status!=='removed'; });
+    const aIdx = allAssigns.findIndex(function(a){
+      if(a.shiftId !== shiftId || a.role !== 'doctor' || a.status === 'removed') return false;
+      const userMatch  = oldDoctor      && a.userId  === oldDoctor;
+      const staffMatch = oldDoctorStaff && a.staffId === oldDoctorStaff;
+      return userMatch || staffMatch;
+    });
     if(aIdx>=0){
       allAssigns[aIdx].status = 'removed';
       if(typeof saveShiftAssignments==='function') saveShiftAssignments(allAssigns);
       await _pushShiftAssignment(allAssigns[aIdx]);
     }
   }
-  if(newDoctor && newDoctor !== oldDoctor){
-    let docName = '';
-    if(typeof getStaff==='function'){
-      const sd = getStaff().find(function(s){ return s.id===newDoctor; });
-      if(sd) docName = sd.name;
-    }
-    if(!docName && typeof getUsers==='function'){
-      const ud = getUsers().find(function(u){ return u.id===newDoctor; });
-      if(ud) docName = ud.name||ud.username||newDoctor;
-    }
-    if(!docName) docName = newDoctor;
-    if(typeof addShiftAssignment==='function'){
-      await addShiftAssignment(shiftId, newDoctor, 'doctor', docName, /*silent=*/true);
+  if(newDoctor && docChanged){
+    if(isLegacyKept){
+      // Legacy preservation: keep stored as-is · do NOT push a new doctor assignment row (legacy string isn't a real id).
+    } else {
+      const docName = docPickedName || newDoctor;
+      if(typeof addShiftAssignment==='function'){
+        await addShiftAssignment(shiftId, {staffId: docPickedStaffId || null, userId: docPickedUserId || null, name: docName}, 'doctor', docName, /*silent=*/true);
+      }
     }
   }
-  // Audit
+  // Audit · [Phase HR1c.6c-write-fix] W4 · use dual-key docChanged flag computed above.
   const detail = prior.branch+'|'+prior.date+'|'+(prior.shiftType||'')+'|'+
     (prior.startTime||'')+'-'+(prior.endTime||'')+'→'+(updated.startTime||'')+'-'+(updated.endTime||'')+
-    (oldDoctor!==newDoctor ? '|docChanged' : '');
+    (docChanged ? '|docChanged' : '');
   if(typeof logAccess==='function') logAccess('hr.shift.edited', shiftId, detail);
   // Q1 — re-run conflict check for each currently-assigned user · non-blocking warning
   try {
@@ -8611,7 +8675,16 @@ async function saveShiftSchedule(){
   const type = typeEl ? typeEl.value : 'morning';
   const startTime = (document.getElementById('cs_start')?.value||'').trim();
   const endTime = (document.getElementById('cs_end')?.value||'').trim();
-  const doctorUserId = (document.getElementById('cs_doctor')?.value||'').trim();
+  // [Phase HR1c.6c-write-fix] W3 · Read doctor identity from picker source-of-truth (HR1c.6c W1).
+  //   The selected <option> carries `data-staff-id` + `data-user-id` + `data-name` (HR1c.6c W1). We use those as
+  //   the authoritative dual-key write source · NOT _resolveStaffIdForUser (which falls back to legacy users.staff_id
+  //   lookup and would mis-match for staff-only doctors with no user account). Stable id = staffId||userId.
+  const docSelEl = document.getElementById('cs_doctor');
+  const docSelOpt = (docSelEl && docSelEl.selectedOptions && docSelEl.selectedOptions[0]) ? docSelEl.selectedOptions[0] : null;
+  const doctorUserId = (docSelEl?.value||'').trim();
+  const docPickedStaffId = (docSelOpt && docSelOpt.dataset) ? (docSelOpt.dataset.staffId || '') : '';
+  const docPickedUserId  = (docSelOpt && docSelOpt.dataset) ? (docSelOpt.dataset.userId  || '') : '';
+  const docPickedName    = (docSelOpt && docSelOpt.dataset) ? (docSelOpt.dataset.name    || '') : '';
   const notes = (document.getElementById('cs_notes')?.value||'').trim().substring(0,400);
   if(!branch){ if(typeof toast==='function') toast('Branch required','err'); return; }
   if(!date || !/^\d{4}-\d{2}-\d{2}$/.test(date)){ if(typeof toast==='function') toast('Invalid date','err'); return; }
@@ -8627,8 +8700,12 @@ async function saveShiftSchedule(){
     id: id, branch: branch, date: date, shiftType: type,
     startTime: startTime+(startTime.length===5?':00':''),
     endTime: endTime+(endTime.length===5?':00':''),
-    doctorUserId: doctorUserId || null,
-    doctorStaffId: doctorUserId && (typeof _resolveStaffIdForUser==='function') ? _resolveStaffIdForUser(doctorUserId) : null, // [Phase HR1c.5.4] dual-write
+    // [Phase HR1c.6c-write-fix] W3 · Always-both-keys dual-write from picker data attrs (W1 source).
+    //   doctorUserId = the userId pinned on the selected option (or null when the doctor is staff-only).
+    //   doctorStaffId = the staffId pinned on the selected option (or null when the doctor is users-only).
+    //   No _resolveStaffIdForUser fallback · the picker is the source of truth (post HR1c.6a cleanup).
+    doctorUserId:  (docPickedUserId  || null),
+    doctorStaffId: (docPickedStaffId || null),
     status: 'planned', notes: notes || null,
     createdBy: (typeof CU!=='undefined' && CU) ? CU.id : null,
     updatedAt: nowISO
@@ -8656,19 +8733,12 @@ async function saveShiftSchedule(){
     const ok = await addShiftAssignment(id, {staffId:n.staffId, userId:n.userId, name:n.staffName}, 'nurse', n.staffName, /*silent=*/true);
     if(ok) added++;
   }
-  // Add doctor assignment if doctor picked
-  if(doctorUserId){
-    let docName = '';
-    if(typeof getStaff==='function'){
-      const sd = getStaff().find(function(s){ return s.id===doctorUserId; });
-      if(sd) docName = sd.name;
-    }
-    if(!docName && typeof getUsers==='function'){
-      const ud = getUsers().find(function(u){ return u.id===doctorUserId; });
-      if(ud) docName = ud.name||ud.username||doctorUserId;
-    }
-    if(!docName) docName = doctorUserId;
-    await addShiftAssignment(id, doctorUserId, 'doctor', docName, /*silent=*/true);
+  // [Phase HR1c.6c-write-fix] W3 · Doctor assignment via dual-key identity object (always-both-keys writes).
+  //   Trigger: any non-empty option selected (stableId = staffId||userId from W1). Identity object passes
+  //   {staffId, userId, name} from data attrs · addShiftAssignment is polymorphic (HR1c.5.5.2a-hotfix contract).
+  if(doctorUserId && (docPickedStaffId || docPickedUserId)){
+    const docName = docPickedName || doctorUserId;
+    await addShiftAssignment(id, {staffId: docPickedStaffId || null, userId: docPickedUserId || null, name: docName}, 'doctor', docName, /*silent=*/true);
   }
   if(typeof logAccess==='function') logAccess('hr.shift.created', id, branch+'|'+date+'|'+type+'|'+nurseList.length+'nurses');
   if(typeof toast==='function') toast('✅ Shift created with '+added+' nurse assignment(s)','ok');
