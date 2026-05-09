@@ -5450,7 +5450,8 @@ function nav(pg){
   if(pg==='assets') acts.innerHTML=`<button class="btn bp btn-sm" onclick="openAddAsset()">+ Add Asset</button>`;
   if(pg==='visaMachines'&&CU.role==='admin') acts.innerHTML=`<button class="btn bp btn-sm" onclick="openAddMachine()">+ Add Machine</button>`;
   // [Phase HR1c.2] Schedules page action button — visible only for roles with hr.shifts.schedule (admin/hr_manager) or .ownBranch (head_nurse)
-  if(pg==='schedules' && (typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule')||hasPerm('hr.shifts.schedule.ownBranch')))) acts.innerHTML=`<button class="btn bp btn-sm" onclick="openCreateShiftModal()">+ Create Shift</button>`;
+  // [Phase HR1c.6d-ux-hotfix] U1 · stable id on header Create Shift button · _setSchedView toggles its visibility · hidden in monthDoctor view.
+  if(pg==='schedules' && (typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule')||hasPerm('hr.shifts.schedule.ownBranch')))) acts.innerHTML=`<button class="btn bp btn-sm" id="schedHeaderCreateBtn" onclick="openCreateShiftModal()">+ Create Shift</button>`;
   const pages={dashboard:renderDash,cases:renderCases,insurance:renderIns,insCos:renderInsCos,finance:renderFin,staff:renderStaff,users:renderUsers,shifts:renderShifts,schedules:renderSchedulesPage,treasury:renderTreasury,reports:renderRpts,settings:renderSettings,assets:renderAssets,visaMachines:renderVisaMachines,catalog:renderCatalog,dataHub:renderDataHub,banks:renderBanks};
   const rendered=(pages[pg]||renderDash)();
   if(rendered!==null&&rendered!==undefined) document.getElementById('contentArea').innerHTML=rendered;
@@ -6274,6 +6275,14 @@ function _setSchedView(mode){
   // [Phase HR1c.6] Doctor Planner mount + toolbar visibility.
   if(doctorPlannerMount)   doctorPlannerMount.style.display   = (m==='monthDoctor') ? '' : 'none';
   if(doctorPlannerToolbar) doctorPlannerToolbar.style.display = (m==='monthDoctor') ? '' : 'none';
+  // [Phase HR1c.6d-ux-hotfix] U3 · Hide global "+ Create Shift" buttons in Doctor Planner view ·
+  //   doctor coverage flow goes through the per-doctor 📅 Plan button (which opens the doctor-only
+  //   Plan Doctor modal). The general Create Shift modal contains nurse checkboxes and is reserved
+  //   for clinic shift creation in Day / Month-Branch / Nurse Planner views.
+  const hdrCreateBtn = document.getElementById('schedHeaderCreateBtn');
+  if(hdrCreateBtn) hdrCreateBtn.style.display = (m==='monthDoctor') ? 'none' : '';
+  const inlineCreateBtnWrap = document.getElementById('schedInlineCreateBtnWrap');
+  if(inlineCreateBtnWrap) inlineCreateBtnWrap.style.display = (m==='monthDoctor') ? 'none' : '';
   if(dayBtn)          dayBtn.classList.toggle('btn-active', m==='day');
   if(monthBranchBtn)  monthBranchBtn.classList.toggle('btn-active', m==='monthBranch');
   if(monthNurseBtn)   monthNurseBtn.classList.toggle('btn-active', m==='monthNurse');
@@ -8615,7 +8624,8 @@ function renderSchedulesPage(){
       <div style="flex:1;min-width:200px" id="schedStats"></div>
     </div>
   </div>
-  ${(typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule')||hasPerm('hr.shifts.schedule.ownBranch')))?`<div style="margin-bottom:10px"><button class="btn bp" onclick="openCreateShiftModal()">+ Create Shift</button></div>`:''}
+  ${/* [Phase HR1c.6d-ux-hotfix] U2 · stable id on inline Create Shift wrap · _setSchedView toggles its visibility · hidden in monthDoctor view. */ ''}
+  ${(typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule')||hasPerm('hr.shifts.schedule.ownBranch')))?`<div id="schedInlineCreateBtnWrap" style="margin-bottom:10px"><button class="btn bp" onclick="openCreateShiftModal()">+ Create Shift</button></div>`:''}
   <div id="schedList"></div>
   <!-- [Phase HR1c.4a] Branch View grid mount · hidden by default · _setSchedView toggles visibility -->
   <div id="schedRosterMount" class="rost-wrap" style="display:none"></div>
