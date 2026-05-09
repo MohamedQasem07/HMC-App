@@ -4557,6 +4557,7 @@ function getUsers() {
             facility: u.facility || 'HMC',
             active: u.active !== false,
             staffId: u.staffId || u.staff_id || null, // [Phase HR1c.5.4b] Preserve users.staff_id linkage · prevents Data Hygiene "Linked to staff" from showing 0 when Supabase has linkages
+            // [Phase HR1c.5.4e] facility was already mapped above · this comment marks the staffId field as the linkage source.
           };
         }).filter(u => u.username);
       }
@@ -4575,9 +4576,11 @@ function saveUsers(arr){
   if(Array.isArray(arr) && arr.length){
     const lastUser = arr[arr.length-1];
     // [Phase HR1c.5.4b] Push staff_id linkage on user-edit save · prevents user-management UI from wiping HR1c.5.4a links
+    // [Phase HR1c.5.4e] U9 (S3) · Also include facility · was silently wiped on every saveUsers cache push.
     const row = { id: lastUser.id, username: lastUser.username, password: lastUser.password,
                   name: lastUser.name, name_ar: lastUser.nameAr||null, role: lastUser.role,
-                  branch: lastUser.branch, staff_id: lastUser.staffId || null };
+                  branch: lastUser.branch, facility: lastUser.facility || 'HMC',
+                  staff_id: lastUser.staffId || null };
     sbAPI('POST', 'users', row).catch(function(e){ console.warn('User sync failed:', e); });
   }
 }
@@ -21299,7 +21302,9 @@ window.handleMigration = handleMigration;
 // ═══════════════════════════════════════════════════════════════════════════
 //  USERS & ACCESS — admin manages login users (admin/reception/manager/nurse)
 // ═══════════════════════════════════════════════════════════════════════════
-const ROLES = ['admin','manager','reception','nurse'];
+// [Phase HR1c.5.4e] U1 (S1) · Extended to all 10 roles supported by HR1a (NAV + ROLE_PERMS + Supabase users.role CHECK).
+//   Order matches operational prominence: admin → manager → reception → head_nurse → nurse → hr_manager → doctor → lab → driver → accountant.
+const ROLES = ['admin','manager','reception','head_nurse','nurse','hr_manager','doctor','lab','driver','accountant'];
 function renderUsers(){
   if(CU.role!=='admin') return '<div style="padding:40px;text-align:center;color:#64748b">🔒 Admin only</div>';
   const users = getUsers().slice().sort((a,b)=>(parseInt(a.id)||0)-(parseInt(b.id)||0));
@@ -21315,17 +21320,32 @@ function renderUsers(){
         <button class="btn bp" onclick="userOpenAdd()">➕ Add User</button>
       </div>
       <div class="tw"><table>
-        <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Branch</th><th>Facility</th><th>Status</th><th style="width:200px">Actions</th></tr></thead>
+        <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Linked Staff</th><th>Branch</th><th>Facility</th><th>Status</th><th style="width:200px">Actions</th></tr></thead>
         <tbody>
         ${users.map(u=>{
           const branchName = u.branch==='all' ? 'All Branches' : (branches.find(b=>b.id===u.branch)?.name || u.branch);
           const isCurrent = CU.id===u.id || String(CU.id)===String(u.id);
           const active = u.active !== false;
           const fac = u.facility || 'HMC';
+          // [Phase HR1c.5.4e] U5 · Linked Staff column · shows staff_code · roleGroup · or "—" if unlinked.
+          //   Helps admin spot mismatches (e.g. user.role=doctor but staff.roleGroup=nurse) at a glance.
+          const linkedStaffCell = (function(){
+            if(!u.staffId) return '<span style="font-size:11px;color:#94a3b8">—</span>';
+            const s = (typeof getStaff==='function') ? getStaff().find(x=>x.id===u.staffId) : null;
+            if(!s) return '<code style="background:#fee2e2;color:#991b1b;font-size:10px;padding:2px 4px;border-radius:3px" title="Staff record not found · may be deleted">'+u.staffId+' (missing)</code>';
+            const grp = s.roleGroup || '?';
+            const grpMatch = (grp === u.role) || (u.role === 'head_nurse' && grp === 'nurse');
+            const grpColor = grpMatch ? '#166534' : '#b91c1c';
+            const grpBg = grpMatch ? '#dcfce7' : '#fee2e2';
+            return '<div><code style="background:#e0e7ff;color:#3730a3;font-size:10px;padding:2px 4px;border-radius:3px">'+(s.staffCode||s.id)+'</code> '+
+                   '<span style="font-size:11px">'+(s.name||'')+'</span></div>'+
+                   '<span class="bdg" style="font-size:9px;background:'+grpBg+';color:'+grpColor+'" title="'+(grpMatch?'roleGroup matches user.role':'⚠ roleGroup mismatch')+'">'+grp+'</span>';
+          })();
           return `<tr style="${active?'':'opacity:.5'}">
             <td><code style="background:#f1f5f9;padding:2px 6px;border-radius:3px">${u.username}</code></td>
             <td><strong>${u.name}</strong>${u.nameAr?`<div style="font-size:11px;color:#64748b">${u.nameAr}</div>`:''}</td>
             <td><span class="bdg ${u.role==='admin'?'bgr':u.role==='manager'?'ba':u.role==='reception'?'bb':'bgo'}" style="font-size:10px">${u.role}</span></td>
+            <td>${linkedStaffCell}</td>
             <td><span class="bdg bb" style="font-size:10px">${branchName}</span></td>
             <td><span class="bdg" style="font-size:10px;background:${fac==='SMC'?'#0a7a3a33':'#1B3A5C33'};color:${fac==='SMC'?'#0a7a3a':'#1B3A5C'}">${fac}</span></td>
             <td>${active?'<span class="bdg bg" style="font-size:10px">Active</span>':'<span class="bdg bgr" style="font-size:10px">Disabled</span>'}</td>
@@ -21344,6 +21364,144 @@ function renderUsers(){
   `;
 }
 
+// [Phase HR1c.5.4e] H1 · Required-link role list · these roles MUST pick a staff record on save (S5).
+//   Optional-link roles (admin/manager/reception) may leave staff blank · legacy users without link get WARN only (Q4).
+const _USER_REQUIRED_LINK_ROLES = new Set(['doctor','nurse','head_nurse','hr_manager','lab','driver','accountant']);
+window._USER_REQUIRED_LINK_ROLES = _USER_REQUIRED_LINK_ROLES;
+
+// [Phase HR1c.5.4e] H2 · Map user.role → allowed staff.roleGroup values for the linked-staff dropdown filter.
+//   null = any active staff (admin/manager/reception/hr_manager). Q3 default · roleGroup mismatch caught by U7 validation.
+const _USER_ROLE_TO_STAFF_GROUPS = {
+  doctor: ['doctor'],
+  nurse: ['nurse'],
+  head_nurse: ['nurse'],   // head nurses come from the nurse pool
+  hr_manager: null,         // any active staff
+  lab: ['lab'],
+  driver: ['driver'],
+  accountant: ['accountant'],
+  reception: ['reception'],
+  admin: null,              // any active staff (or blank)
+  manager: null
+};
+window._USER_ROLE_TO_STAFF_GROUPS = _USER_ROLE_TO_STAFF_GROUPS;
+
+// [Phase HR1c.5.4e] H3 · Build <option> list for the linked-staff dropdown · filtered by selected role.
+//   - Skips inactive staff (S9 default).
+//   - Skips staff already linked to a DIFFERENT user (Q1=B · enforces 1:1 invariant from HR1c.5.1).
+//   - Always includes the currentStaffId value (even if it's already linked to this same user being edited).
+function _userStaffOptions(selectedRole, currentStaffId, currentUserId){
+  const all = (typeof getStaff==='function') ? getStaff() : [];
+  const allUsers = (typeof getUsers==='function') ? getUsers() : [];
+  // Build set of staff IDs already linked to OTHER users (exclude the current user being edited).
+  const usedByOther = new Set();
+  allUsers.forEach(function(u){
+    if(!u || !u.staffId) return;
+    if(currentUserId && String(u.id) === String(currentUserId)) return;
+    usedByOther.add(u.staffId);
+  });
+  const allowedGroups = _USER_ROLE_TO_STAFF_GROUPS[selectedRole];
+  const filtered = all.filter(function(s){
+    if(!s || s.activeStatus !== 'active') return false;
+    if(allowedGroups && allowedGroups.indexOf(s.roleGroup) < 0) return false;
+    if(usedByOther.has(s.id) && s.id !== currentStaffId) return false;
+    return true;
+  });
+  // Sort by staffCode then name for stable order.
+  filtered.sort(function(a,b){
+    return (a.staffCode||'').localeCompare(b.staffCode||'') || (a.name||'').localeCompare(b.name||'');
+  });
+  const isRequired = _USER_REQUIRED_LINK_ROLES.has(selectedRole);
+  const blankLabel = isRequired ? '— pick a staff record —' : '— not linked —';
+  const blankOpt = '<option value="">'+blankLabel+'</option>';
+  const opts = filtered.map(function(s){
+    const sel = (s.id === currentStaffId) ? ' selected' : '';
+    const safeId = String(s.id||'').replace(/"/g,'&quot;');
+    const code = (s.staffCode||s.id||'').replace(/"/g,'&quot;');
+    const nm = (s.name||'').replace(/"/g,'&quot;');
+    const grp = (s.roleGroup||'').replace(/"/g,'&quot;');
+    const home = s.homeBranch ? ' · '+(typeof getBr==='function' ? (getBr(s.homeBranch).name||s.homeBranch) : s.homeBranch) : '';
+    return '<option value="'+safeId+'" data-role-group="'+grp+'" data-home-branch="'+(s.homeBranch||'')+'" data-name="'+nm+'" data-name-ar="'+((s.nameAr||s.fullNameAr||'').replace(/"/g,'&quot;'))+'"'+sel+'>['+code+'] '+nm+(grp?' · '+grp:'')+home+'</option>';
+  }).join('');
+  return blankOpt + opts;
+}
+window._userStaffOptions = _userStaffOptions;
+
+// [Phase HR1c.5.4e] H4 · Triggered by role <select> onchange · re-populate staff dropdown with allowed groups.
+//   Preserves current staff selection if it's still valid for the new role · clears it otherwise.
+function _userRoleChanged(){
+  const roleEl = document.getElementById('uf_role');
+  const staffEl = document.getElementById('uf_staff');
+  if(!roleEl || !staffEl) return;
+  const role = roleEl.value;
+  const currentStaffId = staffEl.value;
+  const currentUserId = staffEl.dataset.userId || null;
+  // Re-build options · filter checks if currentStaffId is still in the allowed list.
+  const newHTML = _userStaffOptions(role, currentStaffId, currentUserId);
+  staffEl.innerHTML = newHTML;
+  // If the current staff is no longer in the dropdown (filtered out by role group change), clear it.
+  if(currentStaffId && !staffEl.querySelector('option[value="'+currentStaffId.replace(/"/g,'&quot;')+'"]')){
+    staffEl.value = '';
+  }
+  // Refresh the required-link hint.
+  const hintEl = document.getElementById('uf_staff_hint');
+  if(hintEl){
+    const required = _USER_REQUIRED_LINK_ROLES.has(role);
+    hintEl.textContent = required
+      ? 'Required for ' + role + ' users · pick the matching Staff record.'
+      : 'Optional for ' + role + ' · leave blank to skip linkage.';
+    hintEl.style.color = required ? '#b91c1c' : '#64748b';
+  }
+}
+window._userRoleChanged = _userRoleChanged;
+
+// [Phase HR1c.5.4e] H5 · Triggered by staff <select> onchange · auto-fill name + branch (S6/U8 + Q2).
+//   - Name (EN) auto-fills only if currently empty (Q2 default · don't override admin choice).
+//   - Name (AR) auto-fills only if currently empty.
+//   - Branch auto-fills only if currently 'all' (Q7 · don't override manual admin choice).
+function _userStaffPicked(){
+  const staffEl = document.getElementById('uf_staff');
+  if(!staffEl) return;
+  const opt = staffEl.selectedOptions && staffEl.selectedOptions[0];
+  if(!opt || !opt.value) return;
+  const ds = opt.dataset || {};
+  const nameEl = document.getElementById('uf_name');
+  const nameArEl = document.getElementById('uf_nameAr');
+  const branchEl = document.getElementById('uf_branch');
+  if(nameEl && !nameEl.value && ds.name) nameEl.value = ds.name;
+  if(nameArEl && !nameArEl.value && ds.nameAr) nameArEl.value = ds.nameAr;
+  if(branchEl && branchEl.value === 'all' && ds.homeBranch){
+    const opt2 = branchEl.querySelector('option[value="'+(ds.homeBranch||'').replace(/"/g,'&quot;')+'"]');
+    if(opt2) branchEl.value = ds.homeBranch;
+  }
+}
+window._userStaffPicked = _userStaffPicked;
+
+// [Phase HR1c.5.4e] H6 (U6 · S4) · Bidirectional reverse-write · keep staff.linked_user_id in sync with users.staff_id.
+//   - Called AFTER successful user push.
+//   - On link change: PATCH staff.linked_user_id=userId for newStaffId · PATCH staff.linked_user_id=null for prevStaffId (if changed).
+//   - Idempotent on no-change (early return).
+//   - Silent failure (don't block the parent UI flow) · queued via sbAPI retry queue if offline.
+async function _pushStaffLinkBack(userId, newStaffId, prevStaffId){
+  if(!userId) return;
+  newStaffId = newStaffId || null;
+  prevStaffId = prevStaffId || null;
+  if(newStaffId === prevStaffId) return;
+  try {
+    if(prevStaffId && prevStaffId !== newStaffId){
+      // Null out the previous staff's link.
+      await sbAPI('PATCH','staff',{linked_user_id:null},'id=eq.'+encodeURIComponent(String(prevStaffId)));
+      if(typeof logAccess==='function') logAccess('hr.user.unlinked', String(userId), 'staff='+String(prevStaffId));
+    }
+    if(newStaffId){
+      await sbAPI('PATCH','staff',{linked_user_id:String(userId)},'id=eq.'+encodeURIComponent(String(newStaffId)));
+      if(typeof logAccess==='function') logAccess('hr.user.linked', String(userId), 'staff='+String(newStaffId));
+    }
+  } catch(e){
+    console.warn('[HR1c.5.4e] _pushStaffLinkBack failed:', e);
+  }
+}
+window._pushStaffLinkBack = _pushStaffLinkBack;
+
 function userOpenAdd(){ _userOpenForm(null); }
 function userOpenEdit(id){
   const u = getUsers().find(x=>x.id===id);
@@ -21353,8 +21511,24 @@ function userOpenEdit(id){
 function _userOpenForm(existing){
   const branches = (typeof BRANCHES!=='undefined' ? BRANCHES : []);
   const isEdit = !!existing;
-  const u = existing || {id:0, username:'', name:'', nameAr:'', role:'nurse', branch:'all', facility:'HMC', active:true};
+  const u = existing || {id:0, username:'', name:'', nameAr:'', role:'nurse', branch:'all', facility:'HMC', active:true, staffId:null};
   const safeId = String(u.id||'').replace(/'/g,"\\'");
+  // [Phase HR1c.5.4e] U2 · Linked Staff selector · build options filtered by current role.
+  //   Q4 (legacy unlinked users) · WARN only · don't block save unless role is in required-link set.
+  const initialRole = u.role || 'nurse';
+  const initialStaffId = u.staffId || '';
+  const initialUserId = isEdit ? String(u.id) : null;
+  const staffOptsInitial = (typeof _userStaffOptions==='function')
+    ? _userStaffOptions(initialRole, initialStaffId, initialUserId)
+    : '<option value="">(staff list unavailable)</option>';
+  const isLinkRequired = (typeof _USER_REQUIRED_LINK_ROLES!=='undefined') && _USER_REQUIRED_LINK_ROLES.has(initialRole);
+  const linkHintText = isLinkRequired
+    ? 'Required for ' + initialRole + ' users · pick the matching Staff record.'
+    : 'Optional for ' + initialRole + ' · leave blank to skip linkage.';
+  const linkHintColor = isLinkRequired ? '#b91c1c' : '#64748b';
+  const legacyWarn = (isEdit && !u.staffId)
+    ? '<div style="background:#fef3c7;color:#7c2d12;padding:6px 10px;border-radius:6px;font-size:11px;margin-top:4px">⚠️ Legacy user without staff link · pick a Staff record to enable HR/payroll integration.</div>'
+    : '';
   const html = `<div id="userFormOvl" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10020;display:flex;align-items:center;justify-content:center" onclick="if(event.target===this)this.remove()">
     <div style="background:#fff;border-radius:10px;width:480px;max-height:90vh;overflow-y:auto;padding:18px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
@@ -21374,7 +21548,7 @@ function _userOpenForm(existing){
         </div>
         <div style="display:grid;grid-template-columns:1fr 1fr;gap:8px">
           <div><label style="font-size:12px;color:#64748b">Role *</label>
-            <select id="uf_role" class="fsi">
+            <select id="uf_role" class="fsi" onchange="_userRoleChanged()">
               ${(typeof ROLES!=='undefined'?ROLES:['admin','reception','manager','nurse']).map(r=>`<option value="${r}" ${u.role===r?'selected':''}>${r}</option>`).join('')}
             </select></div>
           <div><label style="font-size:12px;color:#64748b">Facility</label>
@@ -21389,6 +21563,15 @@ function _userOpenForm(existing){
             ${branches.map(b=>`<option value="${b.id}" ${u.branch===b.id?'selected':''}>${b.type==='main'?'🏥':'🏨'} ${b.name}</option>`).join('')}
           </select>
           <div style="font-size:11px;color:#64748b;margin-top:3px">User can ONLY access cases at this branch (admin/reception bypass this).</div>
+        </div>
+        <!-- [Phase HR1c.5.4e] U2 · Linked Staff selector · filtered by role · auto-fills name+branch via _userStaffPicked -->
+        <div>
+          <label style="font-size:12px;color:#64748b">Linked Staff${isLinkRequired?' *':''}</label>
+          <select id="uf_staff" class="fsi" data-user-id="${initialUserId||''}" onchange="_userStaffPicked()">
+            ${staffOptsInitial}
+          </select>
+          <div id="uf_staff_hint" style="font-size:11px;margin-top:3px;color:${linkHintColor}">${linkHintText}</div>
+          ${legacyWarn}
         </div>
         <label style="display:flex;align-items:center;gap:8px;font-size:13px;background:#f8fafc;padding:10px;border-radius:6px;cursor:pointer">
           <input type="checkbox" id="uf_active" ${u.active!==false?'checked':''}>
@@ -21417,6 +21600,10 @@ async function _pushUserToSupabase(u){
     branch: u.branch,
     facility: u.facility || 'HMC',
     active: u.active !== false,
+    // [Phase HR1c.5.4e] U4 (S2) · Include staff_id so UI edits no longer silently wipe HR1c.5.4 linkages.
+    //   Pre-fix: any UI edit (toggle active, change branch, etc.) would null staff_id on Supabase upsert
+    //   for all 13 currently-linked users. Now the field is preserved through every UI write path.
+    staff_id: u.staffId || null,
   };
   // POST with merge-duplicates does upsert (sbAPI sets the Prefer header).
   return await sbAPI('POST', 'users', row);
@@ -21438,13 +21625,35 @@ async function userSave(existingId){
   const branch = document.getElementById('uf_branch').value;
   const facility = document.getElementById('uf_facility')?.value || 'HMC';
   const active = !!document.getElementById('uf_active')?.checked;
+  // [Phase HR1c.5.4e] U3 · Read staffId + validate (S5 roleGroup match · S12 duplicate enforced via dropdown filter).
+  const staffId = (document.getElementById('uf_staff')?.value || '').trim() || null;
   if(!username || !name){ toast('Username and Name required','err'); return; }
+  // [Phase HR1c.5.4e] U3 · Required-link validation (S5/H1 · doctor / nurse / head_nurse / hr_manager / lab / driver / accountant must link).
+  if((typeof _USER_REQUIRED_LINK_ROLES !== 'undefined') && _USER_REQUIRED_LINK_ROLES.has(role) && !staffId){
+    toast('Role "'+role+'" requires a linked Staff record · pick one from the dropdown','err');
+    return;
+  }
+  // [Phase HR1c.5.4e] U7 · Validate staff.roleGroup matches user.role for required-link roles (S5).
+  //   Optional-link roles (admin/manager/reception) skip this check · they may link to any active staff.
+  if(staffId && (typeof _USER_REQUIRED_LINK_ROLES !== 'undefined') && _USER_REQUIRED_LINK_ROLES.has(role)){
+    const allowedGroups = (typeof _USER_ROLE_TO_STAFF_GROUPS !== 'undefined') ? _USER_ROLE_TO_STAFF_GROUPS[role] : null;
+    if(allowedGroups){
+      const staff = (typeof getStaff==='function') ? getStaff().find(function(s){ return s.id === staffId; }) : null;
+      if(!staff){ toast('Selected staff record not found','err'); return; }
+      if(allowedGroups.indexOf(staff.roleGroup) < 0){
+        toast('Staff roleGroup "'+(staff.roleGroup||'?')+'" does not match user.role "'+role+'" · pick a matching staff record','err');
+        return;
+      }
+    }
+  }
   const users = getUsers().slice();
   let userObj;
+  let prevStaffId = null;  // [Phase HR1c.5.4e] U6 · captured for bidirectional reverse-write.
   if(existingId){
     const idx = users.findIndex(x=>String(x.id)===String(existingId));
     if(idx<0){ toast('User not found','err'); return; }
-    userObj = Object.assign({}, users[idx], {name, nameAr, role, branch, facility, active});
+    prevStaffId = users[idx].staffId || null;
+    userObj = Object.assign({}, users[idx], {name, nameAr, role, branch, facility, active, staffId});
   } else {
     const password = document.getElementById('uf_password').value;
     if(!password || password.length<6){ toast('Password must be at least 6 chars','err'); return; }
@@ -21453,10 +21662,15 @@ async function userSave(existingId){
     // Pick a numeric ID that doesn't collide with existing ones.
     const usedIds = users.map(x=>parseInt(x.id)||0);
     const newId = String((usedIds.length ? Math.max(...usedIds) : 0) + 1);
-    userObj = {id:newId, username, password:hashed, name, nameAr, role, branch, facility, active:true};
+    userObj = {id:newId, username, password:hashed, name, nameAr, role, branch, facility, active:true, staffId};
   }
   try {
     await _pushUserToSupabase(userObj);
+    // [Phase HR1c.5.4e] U6 (S4) · Bidirectional reverse-write · maintain staff.linked_user_id invariant.
+    //   Audit log emitted inside helper · silent failure if Supabase queued.
+    if(typeof _pushStaffLinkBack === 'function' && (staffId || prevStaffId)){
+      await _pushStaffLinkBack(userObj.id, staffId, prevStaffId);
+    }
     await _refreshUsersCache();
     document.getElementById('userFormOvl')?.remove();
     toast(existingId?'✅ User updated in Supabase':'✅ User created in Supabase','ok');
