@@ -6287,6 +6287,92 @@ window._rosterCellPopover   = _rosterCellPopover;
 window._rosterClosePopover  = _rosterClosePopover;
 window._rosterPrint         = _rosterPrint;
 window._rosterExportCSV     = _rosterExportCSV;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [Phase HR1c.5.5.3] Printable Nurse Planner / Monthly Roster Print
+// ═══════════════════════════════════════════════════════════════════════════
+// Mirrors _rosterPrint pattern · uses _plannerBuildHTML(monthYM) byte-identical
+// (no flag · no signature change). Plan column hidden via print CSS only.
+// Scope label = "All Clinics" for hr.shifts.schedule perm · "Branch: <name>"
+// for hr.shifts.schedule.ownBranch perm.
+// Auto-print via window.open() popup + escaped <\/script> per Rule #11.
+// ═══════════════════════════════════════════════════════════════════════════
+function _plannerPrint(){
+  const monthEl = document.getElementById('rostMonth');
+  const today = new Date();
+  const defaultMonth = today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0');
+  const monthYM = (monthEl && monthEl.value) ? monthEl.value : defaultMonth;
+  // [Phase HR1c.5.5.3] Scope label · admin/hr_manager → All Clinics · head_nurse → branch.
+  const hasAll = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
+  const ownBranchOnly = (typeof hasPerm==='function' && !hasAll && hasPerm('hr.shifts.schedule.ownBranch') && typeof CU!=='undefined' && CU && CU.branch && CU.branch!=='all') ? CU.branch : null;
+  let scopeLabel = 'All Clinics';
+  if(ownBranchOnly){
+    const bn = (typeof getBr==='function') ? (getBr(ownBranchOnly).name||ownBranchOnly) : ownBranchOnly;
+    scopeLabel = 'Branch: '+bn;
+  }
+  let monthLbl = monthYM;
+  try { const d = new Date(monthYM+'-01T00:00:00'); monthLbl = d.toLocaleDateString('en-GB',{month:'long',year:'numeric'}); } catch(e){}
+  const preparedBy = (typeof CU!=='undefined' && CU && CU.name) ? CU.name : '';
+  const printedAt = new Date().toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  // [Phase HR1c.5.5.3] Q6 summary · counts derived from existing data (no _plannerBuildHTML changes).
+  const staffRows = (typeof _plannerStaffRows==='function') ? _plannerStaffRows(monthYM) : [];
+  const nurseCount = staffRows.length;
+  const allShiftsCur = (typeof getShiftSchedules==='function') ? getShiftSchedules() : [];
+  const allAssignsCur = (typeof getShiftAssignments==='function') ? getShiftAssignments() : [];
+  const shiftIdsInMonth = new Set(allShiftsCur.filter(function(s){
+    if(!s || !s.id || !s.date || s.status==='cancelled') return false;
+    if(!s.date.startsWith(monthYM)) return false;
+    if(ownBranchOnly && s.branch !== ownBranchOnly) return false;
+    return true;
+  }).map(function(s){ return s.id; }));
+  const shiftCount = allAssignsCur.filter(function(a){
+    return a && a.role==='nurse' && a.status!=='removed' && shiftIdsInMonth.has(a.shiftId);
+  }).length;
+  const tableHTML = (typeof _plannerBuildHTML==='function') ? _plannerBuildHTML(monthYM) : '<div>Planner unavailable</div>';
+  const css = '<style>'+
+    '@page { size: A4 landscape; margin: 8mm; }'+
+    '@media print and (min-width:300mm){ @page { size: A3 landscape; margin: 10mm; } }'+
+    'body { font-family: Arial, sans-serif; margin:0; padding:0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }'+
+    '.planner { width:100%; border-collapse:collapse; table-layout:fixed; font-size: 9pt; }'+
+    '.planner th, .planner td { border: 1px solid #444; padding: 3px 4px; text-align:center; }'+
+    '.planner-staff-col { text-align:left; min-width:130px; font-weight:600; }'+
+    '.planner-day-col .planner-dom { font-weight:700; }'+
+    '.planner-day-col .planner-dow { font-size:7pt; color:#555; }'+
+    '.planner-status-planned   { background:#fef3c7; }'+
+    '.planner-status-published { background:#d4f1d4; }'+
+    '.planner-status-cancelled { background:#fee2e2; color:#b91c1c; text-decoration:line-through; }'+
+    '.planner-off              { color:#94a3b8; }'+
+    '.planner-multi            { padding:0; }'+
+    '.planner-stack            { padding:2px 4px; border-bottom:1px dashed #ccc; }'+
+    '.planner-stack:last-child { border-bottom:none; }'+
+    '.planner-conflict         { color:#b91c1c; font-weight:700; padding-left:2px; }'+
+    '.planner-cell-branch      { font-weight:600; }'+
+    '.planner-cell-time        { font-size:8pt; color:#444; }'+
+    /* [Phase HR1c.5.5.3] Hide operational controls in print · CSS-only · _plannerBuildHTML untouched */
+    '.planner-action-col       { display:none !important; }'+
+    '.noprint, .print-toolbar  { display:none !important; }'+
+    '@media print { .noprint, .print-toolbar { display:none !important; } .planner tr { page-break-inside: avoid; } .planner thead { display: table-header-group; } }'+
+    'h1 { font-size:14pt; margin:8px 0 2px 0; }'+
+    '.planner-meta { font-size:10pt; color:#444; margin-bottom:8px; }'+
+    '</style>';
+  const w = window.open('','_blank','width=1100,height=800');
+  if(!w){ if(typeof toast==='function') toast('Pop-up blocked · allow pop-ups to print','err'); return; }
+  const toolbar = (typeof PRINT_TOOLBAR_HTML!=='undefined') ? PRINT_TOOLBAR_HTML : '';
+  const titleSafe = 'HMC Nurse Planner · '+monthLbl;
+  w.document.open();
+  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+titleSafe+'</title>'+css+'</head><body>'+
+    toolbar+
+    '<div style="padding:10mm">'+
+      '<h1>HMC — Nurse Planner / Monthly Roster — '+monthLbl+'</h1>'+
+      '<div class="planner-meta">Scope: '+scopeLabel+' · '+nurseCount+' nurse'+(nurseCount===1?'':'s')+' · '+shiftCount+' shift'+(shiftCount===1?'':'s')+' · Prepared by '+preparedBy+' · Printed '+printedAt+'</div>'+
+      tableHTML+
+    '</div>'+
+    '<script>setTimeout(function(){ try{ window.print(); }catch(e){} }, 400);<\/script>'+
+    '</body></html>');
+  w.document.close();
+}
+window._plannerPrint         = _plannerPrint;
+
 window._setSchedView        = _setSchedView;
 window._getSchedView        = _getSchedView;
 
@@ -7846,9 +7932,10 @@ function renderSchedulesPage(){
         </div>
       </div>
       <!-- [Phase HR1c.4b.1b] Nurse Planner toolbar (All Clinics · Add Nurse) · visible only in monthNurse mode -->
+      <!-- [Phase HR1c.5.5.3] Print button appended after Add Nurse to Planner · same permission gate -->
       <div id="schedPlannerToolbar" style="display:none;gap:6px;flex-wrap:wrap;align-items:flex-end">
         <span style="font-size:11px;color:var(--g600);align-self:center"><strong>All Clinics</strong> · nurse-centric planner</span>
-        ${(typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule')||hasPerm('hr.shifts.schedule.ownBranch')))?`<button class="btn bs btn-sm" onclick="openAddNurseToPlannerModal()">👥 + Add Nurse to Planner</button>`:''}
+        ${(typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule')||hasPerm('hr.shifts.schedule.ownBranch')))?`<button class="btn bs btn-sm" onclick="openAddNurseToPlannerModal()">👥 + Add Nurse to Planner</button><button class="btn bs btn-sm" onclick="_plannerPrint()">🖨 Print</button>`:''}
       </div>
       <div style="flex:1;min-width:200px" id="schedStats"></div>
     </div>
