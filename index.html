@@ -7279,11 +7279,16 @@ function _doctorPlannerBuildHTML(monthYM){
   if(!days.length) return '<div class="card" style="padding:20px;text-align:center;color:var(--g500)">Invalid month</div>';
   if(!staff.length) return '<div class="card" style="padding:20px;text-align:center;color:var(--g500)">No active doctors. Add doctors via Settings → Staff.</div>';
   const allShifts = (typeof getShiftSchedules==='function') ? getShiftSchedules() : [];
+  // [Phase HR1c.6d] D1 · Plan column gated by hr.shifts.schedule (admin/hr_manager only · Q1).
+  //   head_nurse does NOT plan doctors in this phase · ownBranchOnly fallback intentionally omitted.
+  const canManage = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
   // Header row
   const headerCells = days.map(function(d){
     return '<th class="planner-day-col"><div class="planner-dom">'+d.dom+'</div><div class="planner-dow">'+d.dow+'</div></th>';
   }).join('');
-  const thead = '<thead><tr><th class="planner-staff-col">Doctor</th>'+headerCells+'</tr></thead>';
+  // [Phase HR1c.6d] D1 · Plan column header (sticky-right · matches nurse planner pattern).
+  const planColHeader = canManage ? '<th class="planner-action-col">Plan</th>' : '';
+  const thead = '<thead><tr><th class="planner-staff-col">Doctor</th>'+headerCells+planColHeader+'</tr></thead>';
   // Body rows
   const tbody = '<tbody>'+staff.map(function(p){
     const cells = days.map(function(d){
@@ -7325,7 +7330,10 @@ function _doctorPlannerBuildHTML(monthYM){
       return '<td class="planner-cell planner-multi" data-staff="'+safeStaff+'" data-date="'+safeDate+'">'+stack+'</td>';
     }).join('');
     const homeBadge = p.homeBranchCode ? ' <span style="font-size:9px;color:var(--g500);font-weight:400">(home: '+p.homeBranchCode+')</span>' : '';
-    return '<tr><td class="planner-staff-col">👨‍⚕️ '+(p.name||p.id)+homeBadge+'</td>'+cells+'</tr>';
+    // [Phase HR1c.6d] D1 · Plan button per doctor row · stable id staffId||userId · canManage gates visibility.
+    const safeStableId = String(p.id||'').replace(/'/g,"\\'");
+    const planBtn = canManage ? '<td class="planner-action-col"><button class="btn bs btn-sm" onclick="_doctorPlannerOpenPlan(\''+safeStableId+'\')" style="font-size:10px;white-space:nowrap">📅 Plan</button></td>' : '';
+    return '<tr><td class="planner-staff-col">👨‍⚕️ '+(p.name||p.id)+homeBadge+'</td>'+cells+planBtn+'</tr>';
   }).join('')+'</tbody>';
   return '<table class="planner">'+thead+tbody+'</table>';
 }
@@ -7358,6 +7366,467 @@ window._doctorPlannerShiftsByDate  = _doctorPlannerShiftsByDate;
 window._doctorPlannerBuildHTML     = _doctorPlannerBuildHTML;
 window._doctorPlannerRender        = _doctorPlannerRender;
 window._doctorPlannerFilterChange  = _doctorPlannerFilterChange;
+
+// ═══════════════════════════════════════════════════════════════════════════
+// [Phase HR1c.6d] Plan Doctor · doctor-only planning workflow (analogous to
+// nurse Plan Month but writes to shift_schedules.doctor_user_id/doctor_staff_id
+// and shift_assignments role='doctor'). NO nurse checkboxes · NO Create Shift
+// modal reuse. Permission: hr.shifts.schedule (admin/hr_manager · Q1 default).
+// ═══════════════════════════════════════════════════════════════════════════
+
+// [Phase HR1c.6d] D2 · Dispatcher · resolves doctor identity via getActiveDoctors()
+//   polymorphic match (staffId or userId) and forwards to openPlanDoctorModal.
+function _doctorPlannerOpenPlan(doctorStableId){
+  if(!doctorStableId){ if(typeof toast==='function') toast('Doctor id required','err'); return; }
+  const allDoctors = (typeof getActiveDoctors==='function') ? getActiveDoctors() : [];
+  const d = allDoctors.find(function(x){
+    if(!x) return false;
+    return (x.staffId && x.staffId===doctorStableId) || (x.userId && x.userId===doctorStableId);
+  });
+  if(!d){ if(typeof toast==='function') toast('Doctor not found','err'); return; }
+  openPlanDoctorModal(doctorStableId, null);
+}
+window._doctorPlannerOpenPlan = _doctorPlannerOpenPlan;
+
+// [Phase HR1c.6d] D3 · Plan Doctor modal HTML factory · same .mbd/.modal/.mhdr/.mbody
+//   classes as Plan Month modal · all IDs prefixed `pd_` to avoid nurse-side collision.
+//   NO nurse checkboxes · NO multi-staff section.
+function _schedRenderPlanDoctorModal(){
+  const allowed = (typeof _schedAllowedBranches==='function') ? _schedAllowedBranches() : [];
+  const branchOpts = allowed.map(function(bid){ return '<option value="'+bid+'">'+(getBr(bid).name||bid)+'</option>'; }).join('');
+  return `
+  <div class="mbd" id="planDoctorModal">
+    <div class="modal" style="max-width:760px;width:96vw;max-height:92vh;overflow:auto">
+      <div class="mhdr"><div class="mt" id="pd_title">🩺 Plan Doctor</div>
+      <button class="mc" onclick="closePlanDoctorModal()">×</button></div>
+      <div class="mbody" style="padding:14px">
+        <div style="background:var(--g50);padding:8px 10px;border-radius:6px;margin-bottom:10px;font-size:12px;color:var(--g600)">
+          <div><strong>Doctor:</strong> <span id="pd_doctor_lbl">—</span></div>
+          <div><strong>Month:</strong> <span id="pd_month_lbl">—</span></div>
+        </div>
+        <div style="margin-bottom:8px">
+          <div style="font-size:11px;color:var(--g600);margin-bottom:4px">Days (click to select · multi-select):</div>
+          <div style="display:flex;gap:6px;flex-wrap:wrap;margin-bottom:6px">
+            <button class="btn bs btn-sm" onclick="_planDoctorSelectAll()" style="font-size:11px">Select All</button>
+            <button class="btn bs btn-sm" onclick="_planDoctorSelectWeekdays()" style="font-size:11px">Mon-Fri</button>
+            <button class="btn bs btn-sm" onclick="_planDoctorSelectWeekends()" style="font-size:11px">Sat-Sun</button>
+            <button class="btn bs btn-sm" onclick="_planDoctorClear()" style="font-size:11px">Clear</button>
+            <span style="flex:1"></span>
+            <span style="font-size:11px;color:var(--g600);align-self:center">Selected: <strong id="pd_sel_count">0</strong> day(s)</span>
+          </div>
+          <div id="pd_day_grid" style="display:flex;flex-wrap:wrap;gap:0"></div>
+        </div>
+        <div style="border-top:1px solid var(--g200);margin-top:10px;padding-top:10px">
+          <label style="font-size:11px;color:var(--g600);display:block;margin-bottom:4px">Action:</label>
+          <div style="display:flex;gap:12px;font-size:12px;margin-bottom:8px">
+            <label><input type="radio" name="pd_action" value="assign" checked onchange="_planDoctorActionChange()"> 💾 Assign coverage</label>
+            <label><input type="radio" name="pd_action" value="off" onchange="_planDoctorActionChange()"> ✕ OFF (clear coverage)</label>
+          </div>
+          <div id="pd_assign_block">
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:8px">
+              <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Branch</label>
+                <select class="fsi" id="pd_branch" style="width:100%">${branchOpts}</select></div>
+              <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Shift type</label>
+                <div style="display:flex;gap:6px;flex-wrap:wrap;font-size:12px;padding-top:6px">
+                  <label><input type="radio" name="pd_type" value="morning" checked onchange="_planDoctorShiftTypeChange()"> 🌅 M</label>
+                  <label><input type="radio" name="pd_type" value="evening" onchange="_planDoctorShiftTypeChange()"> 🌆 E</label>
+                  <label><input type="radio" name="pd_type" value="night" onchange="_planDoctorShiftTypeChange()"> 🌙 N</label>
+                  <label><input type="radio" name="pd_type" value="24h" onchange="_planDoctorShiftTypeChange()"> 🕐 24h</label>
+                </div></div>
+            </div>
+            <div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:4px">
+              <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">Start</label>
+                <input class="fsi" id="pd_start" type="time" value="08:00" oninput="_planDoctorUpdateHint()"></div>
+              <div><label style="font-size:11px;color:var(--g600);display:block;margin-bottom:2px">End</label>
+                <input class="fsi" id="pd_end" type="time" value="16:00" oninput="_planDoctorUpdateHint()"></div>
+            </div>
+            <div id="pd_hint" style="font-size:11px;color:var(--g600);margin:6px 0;min-height:16px"></div>
+          </div>
+        </div>
+        <div id="pd_progress" style="display:none;font-size:12px;color:var(--g600);margin-top:8px"></div>
+        <div style="display:flex;gap:10px;justify-content:flex-end;margin-top:14px">
+          <button class="btn bs" id="pd_cancel" onclick="closePlanDoctorModal()">Cancel</button>
+          <button class="btn bp" id="pd_apply" onclick="applyPlanDoctorExecute()">💾 Apply to selected days</button>
+        </div>
+      </div>
+    </div>
+  </div>`;
+}
+
+// [Phase HR1c.6d] D4 · Open Plan Doctor modal · resolve doctor · stash dual-key · build day grid.
+function openPlanDoctorModal(doctorStableId, preselectedDay){
+  const m = document.getElementById('planDoctorModal');
+  if(!m){ if(typeof toast==='function') toast('Open Schedules page first','warn'); return; }
+  const allDoctors = (typeof getActiveDoctors==='function') ? getActiveDoctors() : [];
+  const d = allDoctors.find(function(x){
+    if(!x) return false;
+    return (x.staffId && x.staffId===doctorStableId) || (x.userId && x.userId===doctorStableId);
+  });
+  if(!d){ if(typeof toast==='function') toast('Doctor not found','err'); return; }
+  // [Phase HR1c.6d] Q1 · Permission gate · admin/hr_manager only · head_nurse blocked.
+  const canManage = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
+  if(!canManage){ if(typeof toast==='function') toast('Permission denied','err'); return; }
+  // Resolve current month from filter
+  const monthEl = document.getElementById('rostMonth');
+  const today = new Date();
+  const defaultMonth = today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0');
+  const monthYM = (monthEl && monthEl.value) ? monthEl.value : defaultMonth;
+  let monthLbl = monthYM;
+  try { monthLbl = new Date(monthYM+'-01T00:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'}); } catch(e){}
+  const docName = d.name || doctorStableId;
+  const lblDoc = document.getElementById('pd_doctor_lbl');
+  if(lblDoc) lblDoc.textContent = docName + (d.branch ? ' · home: '+(getBr(d.branch).name||d.branch) : '');
+  const lblMonth = document.getElementById('pd_month_lbl');
+  if(lblMonth) lblMonth.textContent = monthLbl;
+  const titleEl = document.getElementById('pd_title');
+  if(titleEl) titleEl.textContent = '🩺 Plan Doctor — ' + docName;
+  // [Phase HR1c.6d] Stash dual-key + doctorName · applyPlanDoctorExecute reads dataset.
+  m.dataset.doctorId = doctorStableId;
+  m.dataset.staffId = d.staffId || '';
+  m.dataset.userId = d.userId || '';
+  m.dataset.doctorName = docName;
+  m.dataset.monthYM = monthYM;
+  m.dataset.selected = JSON.stringify([]);
+  // Branch dropdown · default to doctor's home branch if any · admin can override (head_nurse blocked above so no lock needed)
+  const branchEl = document.getElementById('pd_branch');
+  if(branchEl){
+    const homeId = d.branch && d.branch!=='all' ? d.branch : '';
+    if(homeId){ const opt = branchEl.querySelector('option[value="'+homeId+'"]'); if(opt) branchEl.value = homeId; }
+    branchEl.disabled = false;
+  }
+  // Reset action + form
+  const aRadio = document.querySelector('input[name="pd_action"][value="assign"]'); if(aRadio) aRadio.checked = true;
+  const tRadio = document.querySelector('input[name="pd_type"][value="morning"]'); if(tRadio) tRadio.checked = true;
+  const startEl = document.getElementById('pd_start'); if(startEl) startEl.value = '08:00';
+  const endEl = document.getElementById('pd_end'); if(endEl) endEl.value = '16:00';
+  // Build day grid · pre-select if requested
+  _planDoctorBuildDayGrid(monthYM, doctorStableId);
+  if(preselectedDay){
+    const pre = JSON.parse(m.dataset.selected||'[]');
+    if(pre.indexOf(preselectedDay)<0){ pre.push(preselectedDay); m.dataset.selected = JSON.stringify(pre); }
+    _planDoctorRefreshDayBoxes();
+    _planDoctorRefreshSelCount();
+  }
+  // Reset progress + apply state
+  const prog = document.getElementById('pd_progress'); if(prog){ prog.style.display='none'; prog.innerHTML=''; }
+  const applyBtn = document.getElementById('pd_apply'); if(applyBtn) applyBtn.disabled = false;
+  const cancelBtn = document.getElementById('pd_cancel'); if(cancelBtn) cancelBtn.disabled = false;
+  _planDoctorActionChange();
+  _planDoctorUpdateHint();
+  m.classList.add('open');
+}
+
+function closePlanDoctorModal(){
+  const m = document.getElementById('planDoctorModal');
+  if(m){ m.classList.remove('open'); delete m.dataset.doctorId; delete m.dataset.monthYM; delete m.dataset.selected; }
+}
+
+// [Phase HR1c.6d] D5 · Day-grid helpers · all `pd_*` prefixed · independent state from nurse Plan Month.
+function _planDoctorBuildDayGrid(monthYM, doctorStableId){
+  const grid = document.getElementById('pd_day_grid');
+  if(!grid) return;
+  const days = (typeof _rosterDayColumns==='function') ? _rosterDayColumns(monthYM) : [];
+  const allShifts = (typeof getShiftSchedules==='function') ? getShiftSchedules() : [];
+  const m = document.getElementById('planDoctorModal');
+  // Use dual-key probe so day boxes reflect coverage from staffId OR userId match.
+  const probe = m ? { staffId: m.dataset.staffId || null, userId: m.dataset.userId || null } : { staffId: doctorStableId, userId: doctorStableId };
+  const today = new Date().toISOString().split('T')[0];
+  grid.innerHTML = days.map(function(d){
+    const shifts = (typeof _doctorPlannerShiftsByDate==='function') ? _doctorPlannerShiftsByDate(probe, d.date, allShifts) : [];
+    let stateLbl = '';
+    if(!shifts.length){ stateLbl = '<span style="color:var(--g400)">—</span>'; }
+    else if(shifts.length === 1){
+      const s = shifts[0];
+      stateLbl = '<div style="font-size:9px"><strong>'+(getBr(s.branch).name||s.branch)+'</strong></div>'+
+                 '<div style="font-size:9px">'+_plannerCompactTimeLabel(s)+'</div>';
+    } else {
+      stateLbl = '<div style="font-size:9px;color:var(--am)">'+shifts.length+' shifts</div>';
+    }
+    const isPast = d.date < today;
+    const safeDate = String(d.date).replace(/'/g, "\\'");
+    return '<div class="plan-day-box'+(isPast?' planner-past':'')+'" data-date="'+d.date+'" onclick="_planDoctorDayBoxClick(\''+safeDate+'\')">'+
+      '<div class="plan-day-box-num">'+d.dom+'</div>'+
+      '<div class="plan-day-box-dow">'+d.dow+'</div>'+
+      '<div class="plan-day-box-state">'+stateLbl+'</div>'+
+      '</div>';
+  }).join('');
+}
+
+function _planDoctorDayBoxClick(dateISO){
+  const m = document.getElementById('planDoctorModal');
+  if(!m) return;
+  let sel = [];
+  try { sel = JSON.parse(m.dataset.selected||'[]'); } catch(e){ sel = []; }
+  const idx = sel.indexOf(dateISO);
+  if(idx >= 0) sel.splice(idx, 1); else sel.push(dateISO);
+  m.dataset.selected = JSON.stringify(sel);
+  _planDoctorRefreshDayBoxes();
+  _planDoctorRefreshSelCount();
+}
+
+function _planDoctorRefreshDayBoxes(){
+  const m = document.getElementById('planDoctorModal');
+  if(!m) return;
+  let sel = [];
+  try { sel = JSON.parse(m.dataset.selected||'[]'); } catch(e){ sel = []; }
+  const selSet = new Set(sel);
+  // Scope query to this modal so we don't touch nurse-side .plan-day-box state.
+  m.querySelectorAll('.plan-day-box').forEach(function(box){
+    const date = box.getAttribute('data-date');
+    if(selSet.has(date)) box.classList.add('selected'); else box.classList.remove('selected');
+    box.classList.remove('skipped');
+  });
+}
+
+function _planDoctorRefreshSelCount(){
+  const m = document.getElementById('planDoctorModal');
+  if(!m) return;
+  let sel = [];
+  try { sel = JSON.parse(m.dataset.selected||'[]'); } catch(e){ sel = []; }
+  const el = document.getElementById('pd_sel_count');
+  if(el) el.textContent = sel.length;
+}
+
+function _planDoctorSelectAll(){
+  const m = document.getElementById('planDoctorModal');
+  if(!m) return;
+  const monthYM = m.dataset.monthYM;
+  const days = (typeof _rosterDayColumns==='function') ? _rosterDayColumns(monthYM) : [];
+  m.dataset.selected = JSON.stringify(days.map(function(d){ return d.date; }));
+  _planDoctorRefreshDayBoxes();
+  _planDoctorRefreshSelCount();
+}
+
+function _planDoctorSelectWeekdays(){
+  const m = document.getElementById('planDoctorModal');
+  if(!m) return;
+  const monthYM = m.dataset.monthYM;
+  const days = (typeof _rosterDayColumns==='function') ? _rosterDayColumns(monthYM) : [];
+  m.dataset.selected = JSON.stringify(days.filter(function(d){ return d.dow !== 'Sat' && d.dow !== 'Sun'; }).map(function(d){ return d.date; }));
+  _planDoctorRefreshDayBoxes();
+  _planDoctorRefreshSelCount();
+}
+
+function _planDoctorSelectWeekends(){
+  const m = document.getElementById('planDoctorModal');
+  if(!m) return;
+  const monthYM = m.dataset.monthYM;
+  const days = (typeof _rosterDayColumns==='function') ? _rosterDayColumns(monthYM) : [];
+  m.dataset.selected = JSON.stringify(days.filter(function(d){ return d.dow === 'Sat' || d.dow === 'Sun'; }).map(function(d){ return d.date; }));
+  _planDoctorRefreshDayBoxes();
+  _planDoctorRefreshSelCount();
+}
+
+function _planDoctorClear(){
+  const m = document.getElementById('planDoctorModal');
+  if(!m) return;
+  m.dataset.selected = JSON.stringify([]);
+  _planDoctorRefreshDayBoxes();
+  _planDoctorRefreshSelCount();
+}
+
+function _planDoctorActionChange(){
+  const action = (document.querySelector('input[name="pd_action"]:checked')||{}).value || 'assign';
+  const block = document.getElementById('pd_assign_block');
+  if(block) block.style.display = (action === 'assign') ? '' : 'none';
+}
+
+function _planDoctorShiftTypeChange(){
+  const t = (document.querySelector('input[name="pd_type"]:checked')||{}).value || 'morning';
+  const def = (typeof _HR1C4_DEFAULT_SHIFT_TIMES !== 'undefined') ? _HR1C4_DEFAULT_SHIFT_TIMES[t] : null;
+  if(!def) return;
+  const startEl = document.getElementById('pd_start');
+  const endEl = document.getElementById('pd_end');
+  if(startEl) startEl.value = def.start.substring(0,5);
+  if(endEl)   endEl.value   = def.end.substring(0,5);
+  _planDoctorUpdateHint();
+}
+
+function _planDoctorUpdateHint(){
+  try {
+    const t = (document.querySelector('input[name="pd_type"]:checked')||{}).value || 'morning';
+    const startTime = (document.getElementById('pd_start')?.value||'').trim();
+    const endTime = (document.getElementById('pd_end')?.value||'').trim();
+    const m = document.getElementById('planDoctorModal');
+    const monthYM = (m && m.dataset && m.dataset.monthYM) ? m.dataset.monthYM : '';
+    const sampleDate = monthYM ? (monthYM+'-01') : '2026-05-01';
+    const hintEl = document.getElementById('pd_hint');
+    if(!hintEl) return;
+    if(typeof _buildOvernightHint==='function'){
+      hintEl.textContent = _buildOvernightHint(sampleDate, startTime, endTime, t);
+    }
+  } catch(e){}
+}
+
+// [Phase HR1c.6d] D6 · Apply Plan Doctor · assign or OFF · doctor-only writes.
+//   Assign branches:
+//     a. Shift missing/cancelled → upsert + patch doctor fields + add shift_assignments
+//     b. Shift exists with NO doctor → patch doctor fields + add shift_assignments
+//     c. Shift exists with SAME doctor → idempotent skip (success counter still increments)
+//     d. Shift exists with DIFFERENT doctor → silent skip + post-batch toast warn (Q5)
+//   OFF branch (Q3 · preserves shift_schedules · only clears doctor coverage):
+//     - For each day, find shift_schedules rows where doctor matches (dual-key)
+//     - Clear doctorUserId + doctorStaffId on those rows + push
+//     - Soft-remove shift_assignments rows with role='doctor' + matching doctor
+async function applyPlanDoctorExecute(){
+  const m = document.getElementById('planDoctorModal');
+  if(!m){ return; }
+  const doctorId = m.dataset.doctorId;
+  const monthYM = m.dataset.monthYM;
+  if(!doctorId || !monthYM){ if(typeof toast==='function') toast('No doctor / month context','err'); return; }
+  const staffId = m.dataset.staffId || null;
+  const userId = m.dataset.userId || null;
+  let sel = [];
+  try { sel = JSON.parse(m.dataset.selected||'[]'); } catch(e){ sel = []; }
+  if(!sel.length){ if(typeof toast==='function') toast('Select at least 1 day','warn'); return; }
+  const action = (document.querySelector('input[name="pd_action"]:checked')||{}).value || 'assign';
+  // Re-resolve + validate doctor.
+  const allDoctors = (typeof getActiveDoctors==='function') ? getActiveDoctors() : [];
+  const d = allDoctors.find(function(x){
+    if(!x) return false;
+    return (x.staffId && x.staffId===doctorId) || (x.userId && x.userId===doctorId);
+  });
+  if(!d || d.active === false){ if(typeof toast==='function') toast('Invalid doctor','err'); return; }
+  const docName = m.dataset.doctorName || d.name || doctorId;
+  // [Phase HR1c.6d] Q1 · Permission gate · admin/hr_manager only.
+  const canManage = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
+  if(!canManage){ if(typeof toast==='function') toast('Permission denied','err'); return; }
+  const applyBtn = document.getElementById('pd_apply'); if(applyBtn) applyBtn.disabled = true;
+  const cancelBtn = document.getElementById('pd_cancel'); if(cancelBtn) cancelBtn.disabled = true;
+  const prog = document.getElementById('pd_progress');
+  let assignedCount = 0, skippedDoctorConflict = 0, idempotentCount = 0, offClearedCount = 0;
+  const skippedDays = [];
+  if(action === 'assign'){
+    const branch = (document.getElementById('pd_branch')?.value||'').trim();
+    const shiftType = (document.querySelector('input[name="pd_type"]:checked')||{}).value || '';
+    const startTime = (document.getElementById('pd_start')?.value||'').trim();
+    const endTime = (document.getElementById('pd_end')?.value||'').trim();
+    if(!branch || !shiftType || !startTime || !endTime){
+      if(typeof toast==='function') toast('Pick branch, shift type, start, and end times','err');
+      if(applyBtn) applyBtn.disabled = false; if(cancelBtn) cancelBtn.disabled = false;
+      return;
+    }
+    const userStartHM = startTime.length===5 ? startTime+':00' : startTime;
+    const userEndHM   = endTime.length===5   ? endTime+':00'   : endTime;
+    for(let i=0;i<sel.length;i++){
+      const day = sel[i];
+      if(prog){ prog.style.display='block'; prog.innerHTML='⏳ Processing day '+(i+1)+' of '+sel.length+' · '+day; }
+      const expectedShiftId = (typeof _schedShiftId==='function') ? _schedShiftId(branch, day, shiftType) : null;
+      // Step 1 · upsert shift if missing/cancelled (returns shiftId).
+      const shiftId = await _rosterUpsertShiftIfMissing(branch, day, shiftType, userStartHM, userEndHM);
+      if(!shiftId) continue;
+      // Step 2 · re-read the shift_schedules row (post-upsert) to inspect its current doctor.
+      const allShiftsCur = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
+      const sIdx = allShiftsCur.findIndex(function(s){ return s && s.id===shiftId; });
+      if(sIdx<0) continue;
+      const cur = allShiftsCur[sIdx];
+      const curDocStaff = cur.doctorStaffId || '';
+      const curDocUser  = cur.doctorUserId || '';
+      const isSameDoctor = (staffId && curDocStaff === staffId) || (userId && curDocUser === userId);
+      const hasOtherDoctor = (curDocStaff || curDocUser) && !isSameDoctor;
+      if(hasOtherDoctor){
+        // Q5 · silent skip + post-batch warn (admin must Edit Shift to swap).
+        skippedDoctorConflict++;
+        skippedDays.push(day);
+        continue;
+      }
+      if(isSameDoctor){
+        // Idempotent · already covered · ensure shift_assignments row exists for audit consistency.
+        idempotentCount++;
+      } else {
+        // Empty doctor slot · patch in place.
+        const nowISO = new Date().toISOString();
+        cur.doctorUserId  = userId  || null;
+        cur.doctorStaffId = staffId || null;
+        cur.updatedAt = nowISO;
+        if(typeof saveShiftSchedules==='function') saveShiftSchedules(allShiftsCur);
+        if(typeof _pushShiftSchedule==='function') await _pushShiftSchedule(cur);
+      }
+      // Step 3 · ensure shift_assignments row with role='doctor' for this doctor (dual-key idempotent).
+      const allAssignsCur = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
+      const already = allAssignsCur.find(function(a){
+        if(!a || a.shiftId!==shiftId || a.role!=='doctor' || a.status==='removed') return false;
+        return (staffId && a.staffId===staffId) || (userId && a.userId===userId);
+      });
+      if(!already && typeof addShiftAssignment==='function'){
+        await addShiftAssignment(shiftId, {staffId:staffId, userId:userId, name:docName}, 'doctor', docName, /*silent=*/true);
+      }
+      if(!isSameDoctor) assignedCount++;
+      if(typeof logAccess==='function') logAccess('hr.doctor.plan_assigned', shiftId, branch+'|'+day+'|'+shiftType+'|'+(staffId||'')+'|'+(userId||''));
+    }
+    // Mark skipped days visually (within this modal only)
+    if(skippedDays.length){
+      skippedDays.forEach(function(date){
+        const box = m.querySelector('.plan-day-box[data-date="'+date+'"]');
+        if(box) box.classList.add('skipped');
+      });
+    }
+    if(typeof toast==='function'){
+      const idemSuffix = idempotentCount ? ' · '+idempotentCount+' already covered' : '';
+      if(skippedDoctorConflict === 0) toast('✅ '+assignedCount+' assigned'+idemSuffix,'ok');
+      else toast('✅ '+assignedCount+' assigned'+idemSuffix+' · ⚠ '+skippedDoctorConflict+' skipped (other doctor on shift)','warn');
+    }
+  } else {
+    // OFF · Q3 · preserve shift_schedules · only clear doctor fields + soft-remove shift_assignments role='doctor'.
+    for(let i=0;i<sel.length;i++){
+      const day = sel[i];
+      if(prog){ prog.style.display='block'; prog.innerHTML='⏳ Processing day '+(i+1)+' of '+sel.length+' · '+day; }
+      const allShiftsCur = (typeof getShiftSchedules==='function')?getShiftSchedules():[];
+      const allAssignsCur = (typeof getShiftAssignments==='function')?getShiftAssignments():[];
+      // Find rows where this doctor is currently assigned on the start-date == day.
+      const targets = allShiftsCur.filter(function(s){
+        if(!s || s.status==='cancelled') return false;
+        if(s.date !== day) return false;
+        const matchesStaff = staffId && s.doctorStaffId === staffId;
+        const matchesUser  = userId  && s.doctorUserId  === userId;
+        return matchesStaff || matchesUser;
+      });
+      for(const s of targets){
+        const nowISO = new Date().toISOString();
+        s.doctorUserId  = null;
+        s.doctorStaffId = null;
+        s.updatedAt = nowISO;
+        if(typeof _pushShiftSchedule==='function') await _pushShiftSchedule(s);
+        // Soft-remove the doctor's shift_assignments row (dual-key).
+        const aIdx = allAssignsCur.findIndex(function(a){
+          if(!a || a.shiftId!==s.id || a.role!=='doctor' || a.status==='removed') return false;
+          return (staffId && a.staffId===staffId) || (userId && a.userId===userId);
+        });
+        if(aIdx>=0){
+          allAssignsCur[aIdx].status = 'removed';
+          if(typeof saveShiftAssignments==='function') saveShiftAssignments(allAssignsCur);
+          if(typeof _pushShiftAssignment==='function') await _pushShiftAssignment(allAssignsCur[aIdx]);
+        }
+        offClearedCount++;
+        if(typeof logAccess==='function') logAccess('hr.doctor.plan_off', s.id, day+'|'+(staffId||'')+'|'+(userId||''));
+      }
+      if(targets.length){
+        if(typeof saveShiftSchedules==='function') saveShiftSchedules(allShiftsCur);
+      }
+    }
+    if(typeof toast==='function') toast('✕ '+offClearedCount+' coverage day'+(offClearedCount===1?'':'s')+' cleared','ok');
+  }
+  if(prog){ prog.innerHTML = '✅ Done'; }
+  closePlanDoctorModal();
+  if(typeof _doctorPlannerFilterChange==='function') _doctorPlannerFilterChange();
+}
+
+// [Phase HR1c.6d] D7 · Window exports · Plan Doctor family.
+window._schedRenderPlanDoctorModal = _schedRenderPlanDoctorModal;
+window.openPlanDoctorModal         = openPlanDoctorModal;
+window.closePlanDoctorModal        = closePlanDoctorModal;
+window.applyPlanDoctorExecute      = applyPlanDoctorExecute;
+window._planDoctorBuildDayGrid     = _planDoctorBuildDayGrid;
+window._planDoctorDayBoxClick      = _planDoctorDayBoxClick;
+window._planDoctorRefreshDayBoxes  = _planDoctorRefreshDayBoxes;
+window._planDoctorRefreshSelCount  = _planDoctorRefreshSelCount;
+window._planDoctorSelectAll        = _planDoctorSelectAll;
+window._planDoctorSelectWeekdays   = _planDoctorSelectWeekdays;
+window._planDoctorSelectWeekends   = _planDoctorSelectWeekends;
+window._planDoctorClear            = _planDoctorClear;
+window._planDoctorActionChange     = _planDoctorActionChange;
+window._planDoctorShiftTypeChange  = _planDoctorShiftTypeChange;
+window._planDoctorUpdateHint       = _planDoctorUpdateHint;
 
 // [Phase HR1c.4b.1b] Plan Month modal · same .mbd/.modal/.mhdr/.mbody HR1c.2a-compatible classes.
 function _schedRenderPlanMonthModal(){
@@ -8160,6 +8629,7 @@ function renderSchedulesPage(){
   ${/* [Phase HR1c.4b] Apply Pattern modal · sibling of Create/AddStaff/Edit modals */ _schedRenderApplyPatternModal()}
   ${/* [Phase HR1c.4b.1b] Plan Month modal · sibling of all above modals */ _schedRenderPlanMonthModal()}
   ${/* [Phase HR1c.4b.1b] Add Nurse to Planner modal · sibling of all above modals */ _schedRenderAddNurseToPlannerModal()}
+  ${/* [Phase HR1c.6d] Plan Doctor modal · doctor-only · NO nurse checkboxes · independent state from Plan Month */ _schedRenderPlanDoctorModal()}
   `;
 }
 
