@@ -6355,6 +6355,52 @@ async function _rosterUpsertShiftIfMissing(branch, dateISO, shiftType, customSta
 }
 window._rosterUpsertShiftIfMissing = _rosterUpsertShiftIfMissing;
 
+// ═══════════════════════════════════════════════════════════════════════════
+// [Phase HR1c.5.5.2c] OFF/Reassign Hygiene · Smart time-mismatch helpers
+// ═══════════════════════════════════════════════════════════════════════════
+// Problem: when admin OFFs all nurses on a shift then reassigns at different times,
+// the shift_schedules row keeps its old times and the time-mismatch check in
+// applyPlanMonthExecute incorrectly skips the day. These two helpers let the assign
+// loop detect "orphaned" shifts (zero active nurse assignments) and retime them
+// in place. Multi-nurse shifts (≥1 other active nurse) keep the skip+warn safety
+// so other nurses' times never change silently.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// [Phase HR1c.5.5.2c] Count active nurse assignments on a shift_schedules row.
+// Returns 0 for orphaned shifts (safe to retime) · ≥1 for shifts with other active nurses.
+function _countActiveAssignsOnShift(shiftId){
+  if(!shiftId) return 0;
+  const all = (typeof _dedupeById === 'function')
+    ? _dedupeById((typeof getShiftAssignments === 'function') ? getShiftAssignments() : [])
+    : ((typeof getShiftAssignments === 'function') ? getShiftAssignments() : []);
+  return all.filter(function(a){
+    return a && a.shiftId === shiftId && a.status !== 'removed' && a.role === 'nurse';
+  }).length;
+}
+window._countActiveAssignsOnShift = _countActiveAssignsOnShift;
+
+// [Phase HR1c.5.5.2c] In-place retime of an orphaned shift_schedules row.
+// CALLER CONTRACT: must verify the shift has zero active nurse assignments (via
+// _countActiveAssignsOnShift) BEFORE calling this · otherwise other active nurses'
+// times would be silently changed. Audit log entry written for traceability.
+async function _rosterUpdateShiftTimes(shiftId, startHM, endHM){
+  if(!shiftId || !startHM || !endHM) return false;
+  const isValid = function(v){ return typeof v === 'string' && /^\d{2}:\d{2}(:\d{2})?$/.test(v); };
+  if(!isValid(startHM) || !isValid(endHM)) return false;
+  const padHHMMSS = function(v){ return v.length === 5 ? v + ':00' : v; };
+  const all = (typeof getShiftSchedules === 'function') ? getShiftSchedules() : [];
+  const idx = all.findIndex(function(s){ return s && s.id === shiftId; });
+  if(idx < 0) return false;
+  all[idx].startTime = padHHMMSS(startHM);
+  all[idx].endTime   = padHHMMSS(endHM);
+  all[idx].updatedAt = new Date().toISOString();
+  if(typeof saveShiftSchedules === 'function') saveShiftSchedules(all);
+  if(typeof _pushShiftSchedule === 'function') await _pushShiftSchedule(all[idx]);
+  if(typeof logAccess === 'function') logAccess('hr.shift.retimed', shiftId, startHM + '..' + endHM);
+  return true;
+}
+window._rosterUpdateShiftTimes = _rosterUpdateShiftTimes;
+
 // Quick-assign a nurse to a (branch, date, shift-type) cell. Auto-creates the shift if missing.
 // Permission gate matches Create Shift (admin/hr_manager all branches · head_nurse own branch).
 async function _rosterCellAssign(staffId, dateISO, branch, shiftType){
@@ -7389,9 +7435,23 @@ async function applyPlanMonthExecute(){
         const eStart = String(existing.startTime||'').substring(0,5);
         const eEnd   = String(existing.endTime||'').substring(0,5);
         if(eStart !== startTime || eEnd !== endTime){
-          skippedTimeMismatch++;
-          skippedDays.push(day);
-          continue;
+          // [Phase HR1c.5.5.2c] OFF/Reassign Hygiene · smart mismatch check.
+          // If the shift is orphaned (zero active nurse assignments), retime it to the user's choice.
+          // If at least one OTHER nurse is still active, keep the existing skip+warn (their times
+          // must not silently shift).
+          const activeCount = (typeof _countActiveAssignsOnShift === 'function') ? _countActiveAssignsOnShift(expectedShiftId) : 1;
+          if(activeCount === 0){
+            // Orphan · safe to retime in place · proceed with assignment after update.
+            if(typeof _rosterUpdateShiftTimes === 'function'){
+              await _rosterUpdateShiftTimes(expectedShiftId, userStartHM, userEndHM);
+            }
+            // fall through · do NOT skip
+          } else {
+            // Multi-nurse shift · keep current safety · skip + warn
+            skippedTimeMismatch++;
+            skippedDays.push(day);
+            continue;
+          }
         }
       }
       const shiftId = await _rosterUpsertShiftIfMissing(branch, day, shiftType, userStartHM, userEndHM);
