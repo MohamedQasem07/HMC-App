@@ -5815,24 +5815,27 @@ function getActiveNurses(branch){
   );
 }
 
-// [Phase HR1c.5.4] Active doctors · prefers staff · users fallback · HMC_DOCTORS legacy fallback only when both empty.
-// Tolerates Title-Case 'Doctor' from 12 seed rows that predate role_group migration.
+// [Phase HR1c.5.4] Active doctors · prefers staff · users fallback.
+// [Phase HR1c.6a] C1 · Strict staff predicate · requires `roleGroup === 'doctor'` exactly.
+//   The earlier role-fallback (`s.role === 'Doctor' || s.role === 'doctor'`) tolerated
+//   12 pre-migration seed rows · those have all been migrated · the fallback now only
+//   matches stale test seeds (doc_001-doc_004) with `roleGroup=NULL` but `role='doctor'`.
+//   Strict roleGroup match cleanly filters those out without any data deletion.
+// [Phase HR1c.6a] C2 · Removed HMC_DOCTORS legacy fallback. Empty result returns empty array;
+//   Doctor Planner shows "No active doctors" empty state via _doctorPlannerBuildHTML guard.
+//   No phantom doctors when staff has zero. The HMC_DOCTORS const itself is preserved at
+//   line ~1367 for backward-compat with CONSULTANTS alias and the legacy Create/Edit Shift
+//   doctor pickers (deferred to HR1c.6c-write-fix · separate phase).
 function getActiveDoctors(branch){
   const out = _hr154CollectActive(
     function(s){
-      const rg = s && (s.roleGroup || ((s.role === 'Doctor' || s.role === 'doctor') ? 'doctor' : null));
-      return rg === 'doctor' && (s.activeStatus === 'active' || s.status === 'Active');
+      // [Phase HR1c.6a] C1 · staff doctors must have roleGroup === 'doctor' (no role-fallback).
+      return s && s.roleGroup === 'doctor' && (s.activeStatus === 'active' || s.status === 'Active');
     },
     function(u){ return u && u.role === 'doctor' && u.active !== false; },
     branch
   );
-  if(out.length === 0 && typeof HMC_DOCTORS !== 'undefined' && Array.isArray(HMC_DOCTORS)){
-    return HMC_DOCTORS.map(function(name){
-      return { id: name, staffId: null, userId: null, staffCode: null, name: name, nameAr: null,
-               jobTitle: null, roleGroup: 'doctor', branch: branch || null, active: true,
-               source: 'legacy', linked: false };
-    });
-  }
+  // [Phase HR1c.6a] C2 · No legacy HMC_DOCTORS fallback · return whatever staff+users yielded.
   return out;
 }
 
