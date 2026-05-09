@@ -4040,6 +4040,187 @@ function requireActiveShift(){
 window.requireActiveShift = requireActiveShift;
 
 // ═══════════════════════════════════════════════════════════════════════════
+// [Phase HR1d.1d] DOCTOR ACCESS GATE · strict gate + branch scope enforcement.
+// ═══════════════════════════════════════════════════════════════════════════
+// Parallel to HR1d.1a nurse gate · ZERO impact on nurse / admin / other roles
+// (every helper short-circuits via `if(CU.role !== 'doctor')`).
+//
+// Architecture:
+//   • DR1 _HR1D1D_ALLOWED_WHEN_BLOCKED — Set of pages reachable while doctor-blocked
+//   • DR2 getMyDoctorShiftsToday()      — array of today's coverage shifts (overnight-aware)
+//   • DR3 getMyDoctorBranchesToday()    — Set<branchId> of today's coverage branches
+//   • DR4 getDoctorScopeBranch()        — current branch scope · resolves single coverage automatically · reads sessionStorage pick for multi
+//   • DR5 setDoctorScopeBranch(branchId)— validates pick is in coverage Set · stores in sessionStorage · re-renders current page
+//   • DR6 requireDoctorCoverageToday()  — 4-state gate: NOT_GATED / OK / BLOCKED_NO_COVERAGE / BLOCKED_NEEDS_BRANCH_PICK
+//
+// Storage: sessionStorage._DR_SCOPE_BRANCH (per-tab · clears on tab close · cleared by doLogout · revalidated against today's coverage Set on every read).
+// Doctor has NO Clock In flow · day-based 24h access on duty dates · branch from coverage NOT CU.branch.
+// ═══════════════════════════════════════════════════════════════════════════
+
+// [Phase HR1d.1d] DR1 · pages reachable while doctor-blocked · everything else re-routes to 'dashboard'.
+const _HR1D1D_ALLOWED_WHEN_BLOCKED = new Set(['dashboard', 'shifts']);
+window._HR1D1D_ALLOWED_WHEN_BLOCKED = _HR1D1D_ALLOWED_WHEN_BLOCKED;
+
+// [Phase HR1d.1d] DR2 · Resolve all of the current/given doctor's coverage shifts for today.
+//   Reads shift_schedules.doctor_user_id / doctor_staff_id (NOT shift_assignments).
+//   Polymorphic identity: omitted (CU default) · string (legacy userId) · object {staffId, userId}.
+//   Returns array of { shift, branch } · empty array when no coverage.
+//   Mirrors _doctorPlannerShiftsByDate filter logic with overnight roll-back.
+function getMyDoctorShiftsToday(userIdOrIdentity){
+  let staffId = null, userId = null;
+  if(typeof userIdOrIdentity === 'undefined' || userIdOrIdentity === null){
+    if(typeof CU === 'undefined' || !CU) return [];
+    userId = CU.id;
+    staffId = (CU.staffId) || (typeof _resolveStaffIdForUser === 'function' ? _resolveStaffIdForUser(CU.id) : null);
+  } else if(typeof userIdOrIdentity === 'string'){
+    userId = userIdOrIdentity;
+    staffId = (typeof _resolveStaffIdForUser === 'function') ? _resolveStaffIdForUser(userId) : null;
+  } else {
+    staffId = userIdOrIdentity.staffId || null;
+    userId = userIdOrIdentity.userId || null;
+  }
+  if(!staffId && !userId) return [];
+  const today = _localTodayISO();
+  const yesterday = (typeof _addDaysISO === 'function') ? _addDaysISO(today, -1) : today;
+  const allShifts = (typeof _dedupeById === 'function')
+    ? _dedupeById((typeof getShiftSchedules === 'function') ? getShiftSchedules() : [])
+    : ((typeof getShiftSchedules === 'function') ? getShiftSchedules() : []);
+  const matches = [];
+  for(const s of allShifts){
+    if(!s || s.status === 'cancelled') continue;
+    const isDoctor = (staffId && s.doctorStaffId === staffId) || (userId && s.doctorUserId === userId);
+    if(!isDoctor) continue;
+    if(s.date === today){
+      matches.push({ shift: s, branch: s.branch });
+      continue;
+    }
+    if(s.date === yesterday){
+      const isOvernight = (typeof _shiftIsOvernight === 'function') && _shiftIsOvernight(s);
+      const is24h = (typeof _shiftIs24h === 'function') && _shiftIs24h(s);
+      if(isOvernight || is24h){
+        matches.push({ shift: s, branch: s.branch });
+      }
+    }
+  }
+  // Sort by start time so multi-branch picks have a stable order
+  matches.sort(function(a,b){
+    return ((a.shift.startTime||'')+'').localeCompare((b.shift.startTime||'')+'');
+  });
+  return matches;
+}
+window.getMyDoctorShiftsToday = getMyDoctorShiftsToday;
+
+// [Phase HR1d.1d] DR3 · Set of branches the current doctor covers today · deduped.
+function getMyDoctorBranchesToday(userIdOrIdentity){
+  const shifts = getMyDoctorShiftsToday(userIdOrIdentity);
+  const set = new Set();
+  shifts.forEach(function(s){ if(s && s.branch) set.add(s.branch); });
+  return set;
+}
+window.getMyDoctorBranchesToday = getMyDoctorBranchesToday;
+
+// [Phase HR1d.1d] DR4 · Current doctor's branch scope.
+//   - Returns null if not doctor · or no coverage today · or multi-coverage with no valid pick.
+//   - Auto-resolves to single coverage branch (no pick needed).
+//   - For multi-coverage: reads sessionStorage._DR_SCOPE_BRANCH · revalidates it's still in today's
+//     coverage Set · drops stale picks silently (Q5 default).
+function getDoctorScopeBranch(){
+  if(typeof CU === 'undefined' || !CU || CU.role !== 'doctor') return null;
+  const branches = getMyDoctorBranchesToday();
+  if(branches.size === 0) return null;
+  if(branches.size === 1) return branches.values().next().value;
+  // Multi-coverage · require explicit pick from sessionStorage · revalidate.
+  let pick = null;
+  try { pick = sessionStorage.getItem('_DR_SCOPE_BRANCH'); } catch(e){ pick = null; }
+  if(pick && branches.has(pick)) return pick;
+  // Stale or missing pick · drop it silently.
+  if(pick){ try { sessionStorage.removeItem('_DR_SCOPE_BRANCH'); } catch(e){} }
+  return null;
+}
+window.getDoctorScopeBranch = getDoctorScopeBranch;
+
+// [Phase HR1d.1d] DR5 · Set the doctor's branch scope · validates against today's coverage Set.
+//   - branchId === null clears the pick (used on logout · also during day rollover via DR4).
+//   - Returns true if accepted · false if branchId is not in today's coverage Set.
+//   - On accept: re-renders current page via nav(PAGE) so all scoped readers refresh.
+function setDoctorScopeBranch(branchId){
+  if(typeof CU === 'undefined' || !CU || CU.role !== 'doctor') return false;
+  if(branchId === null || branchId === ''){
+    try { sessionStorage.removeItem('_DR_SCOPE_BRANCH'); } catch(e){}
+    if(typeof nav === 'function' && typeof PAGE !== 'undefined') nav(PAGE);
+    return true;
+  }
+  const branches = getMyDoctorBranchesToday();
+  if(!branches.has(branchId)) return false;
+  try { sessionStorage.setItem('_DR_SCOPE_BRANCH', branchId); } catch(e){}
+  if(typeof logAccess === 'function') logAccess('hr.doctor.scope.set', branchId, '');
+  if(typeof nav === 'function' && typeof PAGE !== 'undefined') nav(PAGE);
+  return true;
+}
+window.setDoctorScopeBranch = setDoctorScopeBranch;
+
+// [Phase HR1d.1d] DR6 · Doctor-side enforcement gate · single source-of-truth.
+//   States: NOT_LOGGED_IN, NOT_GATED (non-doctor), OK, BLOCKED_NO_COVERAGE, BLOCKED_NEEDS_BRANCH_PICK.
+//   Doctor has NO Clock In flow (per requirement #3) · day-based 24h access on duty dates.
+function requireDoctorCoverageToday(){
+  if(typeof CU === 'undefined' || !CU) return { ok: false, state: 'NOT_LOGGED_IN' };
+  if(CU.role !== 'doctor') return { ok: true, state: 'NOT_GATED' };
+  const shifts = getMyDoctorShiftsToday();
+  if(!shifts || !shifts.length){
+    return { ok: false, state: 'BLOCKED_NO_COVERAGE', shifts: [], branches: new Set(),
+             reason: 'No doctor coverage scheduled today · contact admin' };
+  }
+  const branches = new Set(shifts.map(function(s){ return s.branch; }).filter(Boolean));
+  if(branches.size > 1){
+    const pick = getDoctorScopeBranch();
+    if(!pick){
+      return { ok: false, state: 'BLOCKED_NEEDS_BRANCH_PICK', shifts: shifts, branches: branches,
+               reason: 'Pick today\'s clinic from the branch chip before opening operational pages' };
+    }
+    return { ok: true, state: 'OK', shifts: shifts, branches: branches, scopeBranch: pick };
+  }
+  // Single-coverage · auto-scope to that one branch.
+  const only = branches.values().next().value;
+  return { ok: true, state: 'OK', shifts: shifts, branches: branches, scopeBranch: only };
+}
+window.requireDoctorCoverageToday = requireDoctorCoverageToday;
+
+// [Phase HR1d.1d] DR7 · Render branch chip HTML for the doctor (replaces tbBranch text · Q1=B).
+//   - No coverage today → "🚫 No coverage today" red chip · static.
+//   - Single coverage → "🩺 ${branchName} (today)" green chip · static · informational.
+//   - Multi-coverage no pick → "🟡 [Pick today's clinic ▼]" amber chip · interactive · forces pick.
+//   - Multi-coverage with pick → "🩺 ${pickedBranch} (today · switch ▼)" green chip · interactive · re-pick.
+function _renderDoctorBranchChip(){
+  if(typeof CU === 'undefined' || !CU || CU.role !== 'doctor') return '';
+  const branches = getMyDoctorBranchesToday();
+  if(branches.size === 0){
+    return '<span style="background:#fee2e2;color:#b91c1c;padding:4px 10px;border-radius:14px;font-size:12px;font-weight:600;white-space:nowrap">🚫 No coverage today</span>';
+  }
+  if(branches.size === 1){
+    const only = branches.values().next().value;
+    const name = (typeof getBr==='function') ? (getBr(only).name||only) : only;
+    return '<span style="background:#dcfce7;color:#166534;padding:4px 10px;border-radius:14px;font-size:12px;font-weight:600;white-space:nowrap">🩺 '+name+' (today)</span>';
+  }
+  // Multi-coverage · render interactive selector.
+  const picked = getDoctorScopeBranch();
+  const branchList = Array.from(branches);
+  const opts = branchList.map(function(b){
+    const nm = (typeof getBr==='function') ? (getBr(b).name||b) : b;
+    const sel = (b === picked) ? ' selected' : '';
+    return '<option value="'+b+'"'+sel+'>'+nm+'</option>';
+  }).join('');
+  if(!picked){
+    return '<span style="background:#fef3c7;color:#92400e;padding:2px 6px;border-radius:14px;font-size:12px;font-weight:600;white-space:nowrap">🟡 Pick today\'s clinic </span>'+
+      '<select onchange="setDoctorScopeBranch(this.value)" style="font-size:12px;padding:3px 6px;border-radius:6px;border:1px solid #d97706;margin-left:4px">'+
+      '<option value="">— select —</option>'+opts+'</select>';
+  }
+  const pickedName = (typeof getBr==='function') ? (getBr(picked).name||picked) : picked;
+  return '<span style="background:#dcfce7;color:#166534;padding:2px 6px;border-radius:14px;font-size:12px;font-weight:600;white-space:nowrap">🩺 '+pickedName+' (today · switch)</span>'+
+    '<select onchange="setDoctorScopeBranch(this.value)" style="font-size:12px;padding:3px 6px;border-radius:6px;border:1px solid #166534;margin-left:4px">'+opts+'</select>';
+}
+window._renderDoctorBranchChip = _renderDoctorBranchChip;
+
+// ═══════════════════════════════════════════════════════════════════════════
 // SESSION #5 — WORKDAY MODEL (replaces the old Shift session concept)
 // ═══════════════════════════════════════════════════════════════════════════
 // Goals captured:
@@ -5193,6 +5374,24 @@ function getBr(id){return BRANCHES.find(b=>b.id===id)||{name:id,nameAr:id,type:'
 function canView(u,bidOrCase){
   if(!u) return false;
   if(u.role==='admin'||u.role==='reception') return true;
+  // [Phase HR1d.1d] Doctor scope · uses TODAY'S coverage branch (NOT u.branch).
+  //   - No coverage today → returns false (sees nothing · gate also blocks operational pages).
+  //   - Single-coverage today → auto-scope to that branch.
+  //   - Multi-coverage with pick → scope to picked branch.
+  //   - Multi-coverage without pick → returns false (gate also blocks operational pages until pick).
+  if(u.role==='doctor'){
+    const dscope = (typeof getDoctorScopeBranch==='function') ? getDoctorScopeBranch() : null;
+    if(!dscope) return false;
+    if(typeof bidOrCase==='string') return dscope===bidOrCase;
+    if(bidOrCase && typeof bidOrCase==='object'){
+      const ttId = (typeof extractTransferToBranchId==='function') ? extractTransferToBranchId(bidOrCase.transferTo) : null;
+      return dscope===bidOrCase.branch
+          || dscope===bidOrCase.treatedAt
+          || dscope===bidOrCase.transferTo
+          || dscope===ttId;
+    }
+    return false;
+  }
   if(typeof bidOrCase==='string') return u.branch===bidOrCase;
   if(bidOrCase&&typeof bidOrCase==='object'){
     // [Session #7 fix] Also match transferTo via the normalized branch ID, since
@@ -5288,6 +5487,8 @@ function doLogout(){
   try { if(isWorkdayTrackedUser()) checkoutTodayWorkday(); } catch(e){}
   // [Session #6] Audit log for logout
   try { if(typeof logAccess==='function') logAccess('logout', CU?.id||'', ''); } catch(e){}
+  // [Phase HR1d.1d] Clear doctor scope pick on logout · prevents stale picks bleeding across sessions.
+  try { sessionStorage.removeItem('_DR_SCOPE_BRANCH'); } catch(e){}
   CU=null;localStorage.removeItem('hmc_session');document.getElementById('app').style.display='none';document.getElementById('loginPage').style.display='flex';document.getElementById('lu').value='';document.getElementById('lp').value='';
 }
 function showApp(){
@@ -5438,13 +5639,40 @@ function nav(pg){
       if(typeof toast === 'function') toast(_gate.reason || 'Active shift required to access this page', 'warn');
     }
   }
+  // [Phase HR1d.1d] M3-DR · doctor coverage enforcement gate · parallel to nurse gate.
+  //   Doctor without coverage OR multi-coverage without pick → re-route to 'dashboard'.
+  //   Whitelist: 'dashboard', 'shifts'. NOT_GATED for non-doctors (gate.ok=true · short-circuit).
+  if(typeof requireDoctorCoverageToday === 'function'){
+    const _drGate = requireDoctorCoverageToday();
+    if(!_drGate.ok && typeof _HR1D1D_ALLOWED_WHEN_BLOCKED !== 'undefined' && !_HR1D1D_ALLOWED_WHEN_BLOCKED.has(pg)){
+      pg = 'dashboard';
+      PAGE = 'dashboard';
+      if(typeof toast === 'function') toast(_drGate.reason || 'No doctor coverage scheduled today', 'warn');
+    }
+  }
   document.querySelectorAll('.ni').forEach(e=>e.classList.remove('active'));
   document.getElementById('ni-'+pg)?.classList.add('active');
   const t=PT[pg]||{en:pg,ar:pg};
   document.getElementById('tbTitle').innerHTML=`${t.en}<span>${t.ar}</span>`;
-  document.getElementById('tbBranch').textContent=CU.branch==='all'?'All Branches — جميع الفروع':getBr(CU.branch).name;
+  // [Phase HR1d.1d] Q1=B · doctor branch chip replaces the static tbBranch label · per-tab pick UI.
+  //   - Non-doctor → static branch label (unchanged behavior).
+  //   - Doctor with single coverage → static "🩺 ${branchName} (today)" informational chip.
+  //   - Doctor with multi-coverage no pick → "🟡 [Pick today's clinic ▼]" interactive chip.
+  //   - Doctor with multi-coverage + pick → "🩺 ${pickedBranch} (today · click to switch) ▼".
+  //   - Doctor with no coverage → "🚫 No coverage today" static chip.
+  if(typeof _renderDoctorBranchChip === 'function' && CU && CU.role === 'doctor'){
+    const tbBranchEl = document.getElementById('tbBranch');
+    if(tbBranchEl) tbBranchEl.innerHTML = _renderDoctorBranchChip();
+  } else {
+    document.getElementById('tbBranch').textContent = CU.branch==='all'?'All Branches — جميع الفروع':getBr(CU.branch).name;
+  }
   const acts=document.getElementById('tbActs');acts.innerHTML='';
-  if(pg==='cases') acts.innerHTML=`<div style="display:flex;gap:8px"><button class="btn bs btn-sm" onclick="viewDailyReport()">📋 Daily Report</button><button class="btn bp" onclick="checkShiftThenCase()">+ New Case</button></div>`;
+  // [Phase HR1d.1d] Q3=A · hide '+ New Case' button for doctors entirely (case creation deferred).
+  //   checkShiftThenCase doctor gate (M5-DR) remains as defense-in-depth for direct paths.
+  if(pg==='cases'){
+    const showNewCase = !(CU && CU.role === 'doctor');
+    acts.innerHTML = `<div style="display:flex;gap:8px"><button class="btn bs btn-sm" onclick="viewDailyReport()">📋 Daily Report</button>${showNewCase?'<button class="btn bp" onclick="checkShiftThenCase()">+ New Case</button>':''}</div>`;
+  }
   // [Phase HR1c.5.3] Wire + Add Staff button to openAddStaffModal · permission via hasPerm('staff.manage') (admin + hr_manager).
   if(pg==='staff' && (typeof hasPerm==='function' && hasPerm('staff.manage'))) acts.innerHTML=`<button class="btn bp" onclick="openAddStaffModal()">+ Add Staff</button>`;
   if(pg==='assets') acts.innerHTML=`<button class="btn bp btn-sm" onclick="openAddAsset()">+ Add Asset</button>`;
@@ -9440,7 +9668,27 @@ window.renderShiftAssignmentsList = renderShiftAssignmentsList;
 function renderRolePlaceholderDash(){
   const roleLabels = {lab:'Lab Technician',driver:'Driver',accountant:'Accountant',doctor:'Doctor'};
   const label = roleLabels[CU.role] || CU.role;
+  // [Phase HR1d.1d] Doctor banner · shows gate state inline on dashboard (Q4=yes default).
+  //   - BLOCKED_NO_COVERAGE → red "🚫 No coverage today · contact admin"
+  //   - BLOCKED_NEEDS_BRANCH_PICK → amber "🟡 Pick today's clinic from the header chip to access cases/reports"
+  //   - OK → no banner (My Schedule card already shows the active coverage)
+  let drBanner = '';
+  if(CU.role === 'doctor' && typeof requireDoctorCoverageToday === 'function'){
+    const _drGate = requireDoctorCoverageToday();
+    if(_drGate.state === 'BLOCKED_NO_COVERAGE'){
+      drBanner = '<div class="card" style="padding:14px;margin-bottom:14px;background:#fee2e2;border:1px solid #b91c1c;color:#7f1d1d">'+
+        '<div style="font-size:14px;font-weight:700">🚫 No doctor coverage scheduled today</div>'+
+        '<div style="font-size:12px;margin-top:4px">Operational pages (Cases, Reports) are blocked until you have an assigned shift today. Contact admin if you believe this is an error.</div>'+
+        '</div>';
+    } else if(_drGate.state === 'BLOCKED_NEEDS_BRANCH_PICK'){
+      drBanner = '<div class="card" style="padding:14px;margin-bottom:14px;background:#fef3c7;border:1px solid #d97706;color:#7c2d12">'+
+        '<div style="font-size:14px;font-weight:700">🟡 Multi-clinic coverage today · pick one to continue</div>'+
+        '<div style="font-size:12px;margin-top:4px">You are scheduled at '+_drGate.branches.size+' clinics today. Pick today\'s clinic from the branch chip in the header before opening Cases or Reports.</div>'+
+        '</div>';
+    }
+  }
   return `
+  ${drBanner}
   ${/* [Phase HR1c.3] My Schedule self-view card · sits above the welcome card for doctor / lab / driver / accountant */ (typeof renderMyScheduleCard==='function')?renderMyScheduleCard(CU.id):''}
   <div class="card" style="padding:24px;text-align:center">
     <div style="font-size:42px;margin-bottom:10px">👋</div>
@@ -10251,9 +10499,20 @@ function renderCases(){
   // [Session #5 WORKDAY] No gate — nurse can always view/add cases. Attendance is silent.
   if(CU.role==='nurse'){ try { ensureTodayWorkday(); } catch(e){} }
   const isNurse=CU.role==='nurse';
-  const branchSel=isNurse
-    ?`<div class="fsi" style="width:165px;background:var(--g100);padding:9px 12px;border-radius:var(--ra);font-size:13px;color:var(--g600)">🔒 ${getBr(CU.branch).name}</div>`
-    :`<select class="fsi" id="csBr" onchange="filterCases()" style="width:165px"><option value="">All Branches</option>${BRANCHES.map(b=>`<option value="${b.id}">${b.name}</option>`).join('')}</select>`;
+  // [Phase HR1d.1d] Doctor branch lock · uses TODAY'S coverage scope (NOT CU.branch).
+  //   - dscope null → render disabled blocked card (defense · M3 gate already redirects to dashboard).
+  //   - dscope set → render locked-display chip with the scope branch name.
+  const isDoctor = (CU.role === 'doctor');
+  const dscope = isDoctor ? (typeof getDoctorScopeBranch==='function' ? getDoctorScopeBranch() : null) : null;
+  let branchSel;
+  if(isNurse){
+    branchSel = `<div class="fsi" style="width:165px;background:var(--g100);padding:9px 12px;border-radius:var(--ra);font-size:13px;color:var(--g600)">🔒 ${getBr(CU.branch).name}</div>`;
+  } else if(isDoctor){
+    const scopeName = dscope ? (getBr(dscope).name||dscope) : '— no coverage —';
+    branchSel = `<div class="fsi" style="width:165px;background:var(--g100);padding:9px 12px;border-radius:var(--ra);font-size:13px;color:var(--g600)" title="Locked to today's doctor coverage">🩺 ${scopeName}</div>`;
+  } else {
+    branchSel = `<select class="fsi" id="csBr" onchange="filterCases()" style="width:165px"><option value="">All Branches</option>${BRANCHES.map(b=>`<option value="${b.id}">${b.name}</option>`).join('')}</select>`;
+  }
   const statusSel=(CU.role==='admin'||CU.role==='reception'||CU.role==='manager')
     ?`<select class="fsi" id="csSt" onchange="filterCases()" style="width:140px"><option value="">All Status</option><option>Collected</option><option>Pending</option><option>Partially Collected</option><option>Invoiced</option><option>Draft</option></select>`
     :``;
@@ -10321,12 +10580,25 @@ function filterCases(){
   let cs=getCases().filter(c=>canView(CU,c));
   // #20 — nurse sees only their branch (+ cases transferred TO their branch)
   if(CU.role==='nurse') cs=cs.filter(c=>c.branch===CU.branch||c.treatedAt===CU.branch||isTransferredToBranch(c, CU.branch));
+  // [Phase HR1d.1d] Doctor scope · cases scoped to TODAY'S coverage branch (NOT CU.branch).
+  //   - dscope null → returns zero cases (canView already filtered them out · this is double-safe).
+  //   - canView already enforces the same scope, but explicit filter here defense-in-depth.
+  if(CU.role==='doctor'){
+    const dscope = (typeof getDoctorScopeBranch==='function') ? getDoctorScopeBranch() : null;
+    if(!dscope){ cs = []; }
+    else { cs = cs.filter(c=>c.branch===dscope||c.treatedAt===dscope||isTransferredToBranch(c, dscope)); }
+  }
   const q=(document.getElementById('csQ')?.value||'').toLowerCase();
-  const br=CU.role==='nurse'?CU.branch:(document.getElementById('csBr')?.value||'');
+  // [Phase HR1d.1d] br computation · doctor uses dscope · others unchanged.
+  const br = (CU.role==='nurse')
+    ? CU.branch
+    : (CU.role==='doctor'
+        ? ((typeof getDoctorScopeBranch==='function' ? getDoctorScopeBranch() : null) || '')
+        : (document.getElementById('csBr')?.value||''));
   const pay=document.getElementById('csPay')?.value||'';
   const st=document.getElementById('csSt')?.value||'';
   if(q) cs=cs.filter(c=>(c.patientName+c.id+c.hotel+c.nationality+c.insuredBy+c.diagnosis).toLowerCase().includes(q));
-  if(br&&CU.role!=='nurse') cs=cs.filter(c=>c.branch===br||c.treatedAt===br||c.transferredFrom===br||isTransferredToBranch(c, br));
+  if(br&&CU.role!=='nurse'&&CU.role!=='doctor') cs=cs.filter(c=>c.branch===br||c.treatedAt===br||c.transferredFrom===br||isTransferredToBranch(c, br));
   if(pay) cs=cs.filter(c=>c.paymentMethod===pay||(c.payments||[]).some(p=>p.method===pay));
   if(st) cs=cs.filter(c=>c.invoiceStatus===st);
   const tb=document.getElementById('csTbody');if(!tb)return;
@@ -10643,6 +10915,14 @@ function checkShiftThenCase(){
         return;
       }
     }
+  }
+  // [Phase HR1d.1d] M5-DR · defense-in-depth doctor gate · Q3=A hides + New Case button for doctors,
+  //   but if any direct path reaches checkShiftThenCase (shortcut, console, future code), block here.
+  //   Doctors do NOT create cases in HR1d.1d (deferred to HR1d.1c case identity binding).
+  if(CU.role==='doctor'){
+    if(typeof toast === 'function') toast('Doctors cannot create new cases in this phase', 'warn');
+    if(typeof nav === 'function') nav('dashboard');
+    return;
   }
   openCaseModal();
 }
@@ -17836,7 +18116,15 @@ function renderNSBanner(c){
 //  REPORTS + SETTINGS
 // ════════════════════════════════════════════
 function renderTreasury(){
-  const branch = CU.branch==='all' ? '' : CU.branch;
+  // [Phase HR1d.1d] Doctor scope · uses TODAY'S coverage branch · '__BLOCK__' sentinel when no scope.
+  //   The sentinel never matches a real branch id · filter returns zero rows when doctor is blocked.
+  //   M3 nav gate already routes blocked doctors to dashboard · this is defense-in-depth.
+  const _drScope = (CU.role==='doctor')
+    ? ((typeof getDoctorScopeBranch==='function' ? getDoctorScopeBranch() : null) || '__BLOCK__')
+    : null;
+  const branch = (CU.role==='doctor')
+    ? _drScope
+    : (CU.branch==='all' ? '' : CU.branch);
   let allCases = getCases();
   // #23 — nurse sees only last month's financial data
   if(CU.role==='nurse'||CU.role==='doctor'){
@@ -19219,7 +19507,14 @@ function renderRpts(){
         <div style="display:flex;gap:6px;align-items:center"><span style="font-size:12px;color:var(--g600)">To</span><input type="date" id="rpt_to" class="fsi" value="${today}" style="width:140px" onchange="refreshReport()"></div>
         ${(CU.role==='admin'||CU.role==='reception')
           ? `<select id="rpt_br" class="fsi" style="width:160px" onchange="refreshReport()"><option value="">All Branches</option>${BRANCHES.map(b=>`<option value="${b.id}">${b.name}</option>`).join('')}</select>`
-          : `<div class="fsi" style="width:160px;background:var(--g100);padding:9px 12px;border-radius:var(--ra);font-size:13px;color:var(--g600)" title="Locked to your clinic">🔒 ${getBr(CU.branch).name}</div>`}
+          : (CU.role==='doctor'
+              ? (function(){
+                  // [Phase HR1d.1d] Doctor scope lock · uses TODAY'S coverage branch (NOT CU.branch).
+                  const dscope = (typeof getDoctorScopeBranch==='function') ? getDoctorScopeBranch() : null;
+                  const nm = dscope ? (getBr(dscope).name||dscope) : '— no coverage —';
+                  return `<div class="fsi" style="width:160px;background:var(--g100);padding:9px 12px;border-radius:var(--ra);font-size:13px;color:var(--g600)" title="Locked to today's doctor coverage">🩺 ${nm}</div>`;
+                })()
+              : `<div class="fsi" style="width:160px;background:var(--g100);padding:9px 12px;border-radius:var(--ra);font-size:13px;color:var(--g600)" title="Locked to your clinic">🔒 ${getBr(CU.branch).name}</div>`)}
         ${isAdmin?`<button class="btn bs btn-sm" onclick="setRptQuick('today')">Today</button><button class="btn bs btn-sm" onclick="setRptQuick('week')">This Week</button>`:''}
         <button class="btn bs btn-sm" onclick="setRptQuick('month')">This Month</button>
         ${isAdmin?`<button class="btn bs btn-sm" onclick="setRptQuick('quarter')">Quarter</button><button class="btn bs btn-sm" onclick="setRptQuick('year')">Year</button>`:''}
@@ -19264,7 +19559,14 @@ function refreshReport(){
   // other branches' data, even if the dropdown DOM is tampered with or rpt_br
   // is set programmatically. Admin/reception still see all branches by default.
   const isMultiBranch = (CU.role==='admin'||CU.role==='reception');
-  const br = isMultiBranch ? (document.getElementById('rpt_br')?.value||'') : CU.branch;
+  // [Phase HR1d.1d] Doctor scope · uses TODAY'S coverage branch · '__BLOCK__' sentinel when no scope.
+  //   The sentinel never matches a real branch id, so filter returns zero rows when blocked.
+  const _drScope = (CU.role==='doctor')
+    ? ((typeof getDoctorScopeBranch==='function' ? getDoctorScopeBranch() : null) || '__BLOCK__')
+    : null;
+  const br = isMultiBranch
+    ? (document.getElementById('rpt_br')?.value||'')
+    : ((CU.role==='doctor') ? _drScope : CU.branch);
   const all=getCases().filter(c=>{
     if(!canView(CU,c)) return false;
     if(br&&c.branch!==br&&c.treatedAt!==br) return false;
