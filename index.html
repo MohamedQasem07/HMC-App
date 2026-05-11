@@ -1206,21 +1206,28 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
         <div class="sign-in-title">Sign In</div>
       </div>
       <div class="lcard-s">تسجيل الدخول — أدخل بيانات حسابك</div>
-      <div class="fg"><label class="fl">Username</label><input class="fi" id="lu" placeholder="Username" autocomplete="username"></div>
+      <!-- [Phase HR1c.5.4f] L3 · Login accepts username OR linked Staff Code (HMC007 format) · case-insensitive. -->
+      <div class="fg"><label class="fl">Username or Staff Code</label><input class="fi" id="lu" placeholder="e.g. HMC007 or username" autocomplete="username"></div>
+      <div style="font-size:11px;color:rgba(255,255,255,0.65);margin:-6px 0 8px 4px">Use your HR Staff Code if you have one · usernames still work</div>
       <div class="fg"><label class="fl">Password</label><input class="fi" id="lp" type="password" placeholder="••••••••"></div>
       <div class="lerr" id="lerr">Invalid username or password</div>
       <button class="btn-login" onclick="doLogin()">Login — دخول</button>
       <button class="change-pwd-btn" onclick="openChangePwd()">🔑 Change Password — تغيير كلمة المرور</button>
-      <div class="demo-s">
-        <div class="demo-l">Quick login</div>
-        <div class="demo-btns">
-          <button class="demo-btn" onclick="ql('admin','admin123')">👑 Admin</button>
-          <button class="demo-btn" onclick="ql('reception','rec123')">🖥️ Reception</button>
-          <button class="demo-btn" onclick="ql('kawther_mgr','mgr123')">🏥 Kawther</button>
-          <button class="demo-btn" onclick="ql('tropitel_asaad','nur123')">💉 Tropitel (Asaad)</button>
-          <button class="demo-btn" onclick="ql('romance_saeed','nur123')">💉 Kai Soul (Saeed)</button>
+      <!-- [Phase HR1c.5.4f] L4 (Q4=C) · Quick Login wrapped in "Demo / Dev Only" collapsed section ·
+           hides credentials behind a click · before production these will be hidden entirely (Q4 plan B). -->
+      <details class="demo-s" style="margin-top:14px">
+        <summary style="cursor:pointer;font-size:11px;color:rgba(255,255,255,0.7);padding:6px;background:rgba(255,255,255,0.04);border-radius:6px;font-weight:600">🧪 Demo / Dev Only · click to expand</summary>
+        <div style="padding-top:8px">
+          <div class="demo-l" style="font-size:10px;color:rgba(255,255,255,0.5);margin-bottom:4px">⚠ These buttons expose credentials in HTML source · hide before real production deploy.</div>
+          <div class="demo-btns">
+            <button class="demo-btn" onclick="ql('admin','admin123')">👑 Admin</button>
+            <button class="demo-btn" onclick="ql('reception','rec123')">🖥️ Reception</button>
+            <button class="demo-btn" onclick="ql('kawther_mgr','mgr123')">🏥 Kawther</button>
+            <button class="demo-btn" onclick="ql('tropitel_asaad','nur123')">💉 Tropitel (Asaad)</button>
+            <button class="demo-btn" onclick="ql('romance_saeed','nur123')">💉 Kai Soul (Saeed)</button>
+          </div>
         </div>
-      </div>
+      </details>
     </div>
 
     <!-- Change Password Modal -->
@@ -1228,7 +1235,8 @@ button, .ni, .btn, .room-card, .sc, .ss-it{ -webkit-tap-highlight-color: transpa
       <div class="pwd-box">
         <div style="font-size:16px;font-weight:600;margin-bottom:4px">🔑 Change Password</div>
         <div style="font-size:12px;color:var(--g500);margin-bottom:18px">تغيير كلمة المرور</div>
-        <div class="fg"><label class="fl">Username</label><input class="fi" id="pwd_user" placeholder="Your username"></div>
+        <!-- [Phase HR1c.5.4f] M9 · Username locked to CU.username · pre-filled + readonly · admin uses Reset Password modal for OTHER users. -->
+        <div class="fg"><label class="fl">Username</label><input class="fi" id="pwd_user" placeholder="Your username" readonly title="Change Password targets your own account · admin uses Reset Password for other users" style="background:#f1f5f9"></div>
         <div class="fg"><label class="fl">Current Password</label><input class="fi" type="password" id="pwd_old" placeholder="Current password"></div>
         <div class="fg"><label class="fl">New Password</label><input class="fi" type="password" id="pwd_new" placeholder="New password (min 6 chars)"></div>
         <div class="fg"><label class="fl">Confirm New Password</label><input class="fi" type="password" id="pwd_confirm" placeholder="Confirm new password"></div>
@@ -1351,12 +1359,31 @@ async function sha256Hex(str){
 async function hashPassword(plain){
   return 'sha256:' + await sha256Hex(plain);
 }
+// [Phase HR1c.5.4f] L6 · Temporary-password hash · prefix `temp:` instead of `sha256:`.
+//   Used by admin Reset Password (M4 modal). On successful verify, sets sessionStorage
+//   sentinel `_PWD_MUST_CHANGE='1'` · user is forced to change password before continuing.
+//   When user changes password via doChangePwd, the new password is stored with `sha256:`
+//   prefix · sentinel naturally clears on next verify since temp: no longer matches.
+async function hashTempPassword(plain){
+  return 'temp:' + await sha256Hex(plain);
+}
+window.hashTempPassword = hashTempPassword;
+
 async function verifyPassword(input, stored){
   if(!stored) return false;
   // Hashed format: "sha256:<hex>"
   if(typeof stored==='string' && stored.startsWith('sha256:')){
     const hashed = 'sha256:' + await sha256Hex(input);
     return hashed === stored;
+  }
+  // [Phase HR1c.5.4f] L6 · Temporary password format: "temp:<hex>" · sets "must change" sentinel.
+  if(typeof stored==='string' && stored.startsWith('temp:')){
+    const hashed = 'temp:' + await sha256Hex(input);
+    const ok = (hashed === stored);
+    if(ok){
+      try { sessionStorage.setItem('_PWD_MUST_CHANGE', '1'); } catch(e){}
+    }
+    return ok;
   }
   // Backward compatibility: plain password (e.g., newly created user before hash)
   // Log a warning so we notice any remaining plaintext in data.
@@ -5459,8 +5486,34 @@ async function doLogin(){
   const u=document.getElementById('lu').value.trim();
   const p=document.getElementById('lp').value;
   const err=document.getElementById('lerr');
-  // Find user by username first
-  const candidate = getUsers().find(x=>x.username===u);
+  // [Phase HR1c.5.4f] L1+M1 · Case-insensitive lookup · accepts username OR linked staff_code.
+  //   Lookup chain:
+  //     1. username compare (case-insensitive · u.toLowerCase()).
+  //     2. If not found, treat input as staff_code (case-insensitive · uppercase normalize).
+  //        Find matching staff records · if multiple match (M11 ambiguous), reject with clear error.
+  //        If exactly one matches and has linked_user_id, look up the user.
+  //   `auth.login.username` vs `auth.login.staff_code` audit emitted per matched path (L8).
+  const uLower = u.toLowerCase();
+  const uUpper = u.toUpperCase();
+  let candidate = getUsers().find(function(x){ return x && x.username && x.username.toLowerCase() === uLower; });
+  let loginPath = 'username';
+  if(!candidate){
+    // [Phase HR1c.5.4f] L1 · Staff code fallback path · find via staff.staff_code → users.id.
+    const allStaff = (typeof getStaff==='function') ? getStaff() : [];
+    const staffMatches = allStaff.filter(function(s){
+      return s && s.staffCode && s.staffCode.toUpperCase() === uUpper;
+    });
+    if(staffMatches.length > 1){
+      // [Phase HR1c.5.4f] M11 · Ambiguous staff code · reject with clear error · do not pick any match.
+      if(err){ err.textContent = '⚠ Ambiguous staff code "'+u+'" matches '+staffMatches.length+' records · contact admin'; err.style.display='block'; }
+      if(typeof logAccess==='function') logAccess('auth.login.ambiguous_staff_code', '', u);
+      return;
+    }
+    if(staffMatches.length === 1 && staffMatches[0].linkedUserId){
+      candidate = getUsers().find(function(x){ return x && String(x.id) === String(staffMatches[0].linkedUserId); });
+      if(candidate) loginPath = 'staff_code';
+    }
+  }
   if(!candidate){ err.style.display='block'; return; }
   // [Session #7] Disabled users cannot sign in. Show a clear message rather than
   // a generic "wrong password" so the user knows to contact admin.
@@ -5469,7 +5522,7 @@ async function doLogin(){
     err.style.display='block';
     return;
   }
-  // Verify password (supports both sha256: hashed and legacy plain)
+  // Verify password (supports sha256: hashed · temp: sentinel · legacy plain)
   let ok=false;
   try { ok = await verifyPassword(p, candidate.password); }
   catch(e){ console.error('verifyPassword failed',e); ok=false; }
@@ -5481,6 +5534,8 @@ async function doLogin(){
   err.style.display='none';
   CU=candidate;
   sl('hmc_session',JSON.stringify(candidate));
+  // [Phase HR1c.5.4f] L8 · Audit log per login path.
+  if(typeof logAccess==='function') logAccess('auth.login.'+loginPath, String(candidate.id), candidate.username||'');
   showApp();
 }
 function ql(u,p){document.getElementById('lu').value=u;document.getElementById('lp').value=p;doLogin();}
@@ -5510,6 +5565,17 @@ function showApp(){
   } else {
     nav('dashboard');
   }
+  // [Phase HR1c.5.4f] L7 · Force Change Password modal post-login if temp-password sentinel was set
+  //   during password verify (admin reset · `temp:` prefix). User cannot dismiss until they
+  //   change password · sentinel auto-clears on successful change (new password stored as `sha256:`).
+  try {
+    if(sessionStorage.getItem('_PWD_MUST_CHANGE') === '1'){
+      setTimeout(function(){
+        if(typeof openChangePwd === 'function') openChangePwd();
+        if(typeof toast === 'function') toast('🔒 Please change your temporary password before continuing','warn');
+      }, 150);
+    }
+  } catch(e){}
 }
 
 // [Session #5 WORKDAY cleanup] Removed showMandatoryShiftStart — replaced by
@@ -20928,6 +20994,11 @@ function dlCSV(rows,name){const csv=rows.map(r=>r.map(v=>`"${String(v||'').repla
 
 // ── Change Password ──
 function openChangePwd() {
+  // [Phase HR1c.5.4f] M9 · Pre-fill pwd_user with CU.username · readonly · target locked to current user.
+  const userEl = document.getElementById('pwd_user');
+  if(userEl){
+    userEl.value = (typeof CU !== 'undefined' && CU && CU.username) ? CU.username : '';
+  }
   document.getElementById('pwdModal').classList.add('open');
 }
 function closePwdModal() {
@@ -20935,18 +21006,24 @@ function closePwdModal() {
   document.getElementById('pwd_err').style.display = 'none';
 }
 async function doChangePwd() {
-  const username = document.getElementById('pwd_user').value.trim();
+  // [Phase HR1c.5.4f] L2+M9 · Locked to CU.username · the pwd_user field is read-only and
+  //   pre-filled with the current user's username (no admin-other-user changes possible here).
+  //   The Reset Password modal (M4) is the admin path for changing OTHER users' passwords.
+  const cuUsername = (typeof CU !== 'undefined' && CU) ? (CU.username || '') : '';
+  const username = cuUsername || (document.getElementById('pwd_user')?.value || '').trim();
   const oldPwd = document.getElementById('pwd_old').value;
   const newPwd = document.getElementById('pwd_new').value;
   const confirm = document.getElementById('pwd_confirm').value;
   const errEl = document.getElementById('pwd_err');
   errEl.style.display = 'none';
 
+  if(!username){ errEl.textContent = 'Not logged in'; errEl.style.display='block'; return; }
   const users = getUsers();
-  // Find user first
-  const user = users.find(u => u.username === username);
+  // [Phase HR1c.5.4f] M1 · Case-insensitive username lookup (matches doLogin contract).
+  const uLower = username.toLowerCase();
+  const user = users.find(u => u && u.username && u.username.toLowerCase() === uLower);
   if (!user) { errEl.textContent = 'Username or current password is incorrect'; errEl.style.display = 'block'; return; }
-  // Verify old password (supports hashed + legacy plain for backward compat)
+  // Verify old password (supports hashed + temp: sentinel + legacy plain for backward compat)
   let oldOk = false;
   try { oldOk = await verifyPassword(oldPwd, user.password); }
   catch(e){ console.error('verifyPassword failed', e); oldOk = false; }
@@ -20954,18 +21031,22 @@ async function doChangePwd() {
   if (newPwd.length < 6) { errEl.textContent = 'New password must be at least 6 characters'; errEl.style.display = 'block'; return; }
   if (newPwd !== confirm) { errEl.textContent = 'Passwords do not match'; errEl.style.display = 'block'; return; }
 
-  // Hash the new password before storing
+  // Hash the new password before storing (always `sha256:` prefix · clears any `temp:` sentinel naturally).
   const hashedNew = await hashPassword(newPwd);
 
   // Update in localStorage
   const localUsers = JSON.parse(ls('hmc_users_remote') || '[]');
-  const idx = localUsers.findIndex(u => u.username === username);
+  const idx = localUsers.findIndex(u => u && u.username && u.username.toLowerCase() === uLower);
   if (idx >= 0) {
     localUsers[idx].password = hashedNew;
     sl('hmc_users_remote', JSON.stringify(localUsers));
   }
   // Push hashed password to Supabase
   sbAPI('PATCH','users',{password:hashedNew},'id=eq.'+user.id).catch(e=>console.warn('PWD sync:',e));
+  // [Phase HR1c.5.4f] L6/L7 · Clear "must change" sentinel on successful self-change.
+  try { sessionStorage.removeItem('_PWD_MUST_CHANGE'); } catch(e){}
+  // [Phase HR1c.5.4f] L8 · Audit · self-change event.
+  if(typeof logAccess==='function') logAccess('auth.password.changed.self', String(user.id), '');
   closePwdModal();
   toast('Password changed successfully! — تم تغيير كلمة المرور', 'ok');
 }
@@ -21320,7 +21401,7 @@ function renderUsers(){
         <button class="btn bp" onclick="userOpenAdd()">➕ Add User</button>
       </div>
       <div class="tw"><table>
-        <thead><tr><th>Username</th><th>Name</th><th>Role</th><th>Linked Staff</th><th>Branch</th><th>Facility</th><th>Status</th><th style="width:200px">Actions</th></tr></thead>
+        <thead><tr><th>Username</th><th>Staff Code</th><th>Name</th><th>Role</th><th>Linked Staff</th><th>Branch</th><th>Facility</th><th>Status</th><th style="width:200px">Actions</th></tr></thead>
         <tbody>
         ${users.map(u=>{
           const branchName = u.branch==='all' ? 'All Branches' : (branches.find(b=>b.id===u.branch)?.name || u.branch);
@@ -21329,9 +21410,19 @@ function renderUsers(){
           const fac = u.facility || 'HMC';
           // [Phase HR1c.5.4e] U5 · Linked Staff column · shows staff_code · roleGroup · or "—" if unlinked.
           //   Helps admin spot mismatches (e.g. user.role=doctor but staff.roleGroup=nurse) at a glance.
+          // [Phase HR1c.5.4f] L5 · Staff Code column (added BEFORE Name) · shows the login alias
+          //   that the user can use instead of username · prominent format for phone-handoff.
+          const linkedStaffRecord = (function(){
+            if(!u.staffId) return null;
+            return (typeof getStaff==='function') ? (getStaff().find(x=>x.id===u.staffId) || null) : null;
+          })();
+          const staffCodeCell = (function(){
+            if(!linkedStaffRecord) return '<span style="font-size:11px;color:#94a3b8">—</span>';
+            return '<code style="background:#dbeafe;color:#1e40af;font-size:11px;padding:3px 7px;border-radius:4px;font-weight:600" title="Staff Code · use as login alias">'+(linkedStaffRecord.staffCode||linkedStaffRecord.id)+'</code>';
+          })();
           const linkedStaffCell = (function(){
             if(!u.staffId) return '<span style="font-size:11px;color:#94a3b8">—</span>';
-            const s = (typeof getStaff==='function') ? getStaff().find(x=>x.id===u.staffId) : null;
+            const s = linkedStaffRecord;
             if(!s) return '<code style="background:#fee2e2;color:#991b1b;font-size:10px;padding:2px 4px;border-radius:3px" title="Staff record not found · may be deleted">'+u.staffId+' (missing)</code>';
             const grp = s.roleGroup || '?';
             const grpMatch = (grp === u.role) || (u.role === 'head_nurse' && grp === 'nurse');
@@ -21343,6 +21434,7 @@ function renderUsers(){
           })();
           return `<tr style="${active?'':'opacity:.5'}">
             <td><code style="background:#f1f5f9;padding:2px 6px;border-radius:3px">${u.username}</code></td>
+            <td>${staffCodeCell}</td>
             <td><strong>${u.name}</strong>${u.nameAr?`<div style="font-size:11px;color:#64748b">${u.nameAr}</div>`:''}</td>
             <td><span class="bdg ${u.role==='admin'?'bgr':u.role==='manager'?'ba':u.role==='reception'?'bb':'bgo'}" style="font-size:10px">${u.role}</span></td>
             <td>${linkedStaffCell}</td>
@@ -21760,19 +21852,83 @@ async function userSave(existingId){
   }
 }
 
-async function userResetPwd(id){
+// [Phase HR1c.5.4f] M4 · Reset Password proper modal · replaces JS prompt() · validates length + confirm.
+//   Stores the new password with `temp:` prefix (L6 sentinel) so user is forced to change on next login.
+//   `auth.password.reset.admin` audit event emitted (L8).
+function userResetPwd(id){
   const u = getUsers().find(x=>String(x.id)===String(id));
-  if(!u) return;
-  const newPwd = prompt(`Enter new password for ${u.username}:`);
-  if(!newPwd) return;
-  if(newPwd.length<6){ toast('Password must be at least 6 chars','err'); return; }
-  const hashed = await hashPassword(newPwd);
+  if(!u){ toast('User not found','err'); return; }
+  _userOpenResetPwdModal(u);
+}
+
+function _userOpenResetPwdModal(u){
+  const safeId = String(u.id||'').replace(/'/g,"\\'");
+  const safeUsername = String(u.username||'').replace(/"/g,'&quot;');
+  const safeName = String(u.name||'').replace(/"/g,'&quot;');
+  const html = `<div id="userResetPwdOvl" style="position:fixed;inset:0;background:rgba(0,0,0,.55);z-index:10025;display:flex;align-items:center;justify-content:center" onclick="if(event.target===this)this.remove()">
+    <div style="background:#fff;border-radius:10px;width:440px;max-height:90vh;overflow-y:auto;padding:18px;box-shadow:0 20px 60px rgba(0,0,0,.3)">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+        <strong style="font-size:15px">🔑 Reset Password</strong>
+        <button onclick="document.getElementById('userResetPwdOvl').remove()" style="background:none;border:none;font-size:18px;cursor:pointer">✕</button>
+      </div>
+      <div style="background:#f8fafc;padding:10px;border-radius:6px;font-size:12px;margin-bottom:14px">
+        <div><strong>User:</strong> <code style="background:#fff;padding:2px 6px;border-radius:3px">${safeUsername}</code></div>
+        <div><strong>Name:</strong> ${safeName}</div>
+      </div>
+      <div style="background:#fef3c7;color:#7c2d12;padding:8px 10px;border-radius:6px;font-size:11px;margin-bottom:12px">
+        🔒 <strong>Temporary password</strong> · the user will be required to change it on next login.
+      </div>
+      <div style="display:grid;gap:10px">
+        <div><label style="font-size:12px;color:#64748b">New Temporary Password *</label>
+          <input id="urp_pwd" class="fsi" type="password" placeholder="Minimum 6 characters" autocomplete="new-password"></div>
+        <div><label style="font-size:12px;color:#64748b">Confirm Password *</label>
+          <input id="urp_confirm" class="fsi" type="password" placeholder="Re-type the password" autocomplete="new-password"></div>
+        <div id="urp_err" style="display:none;background:#fee2e2;color:#991b1b;padding:6px 10px;border-radius:6px;font-size:12px"></div>
+      </div>
+      <div style="display:flex;justify-content:flex-end;gap:6px;margin-top:14px;padding-top:12px;border-top:1px solid #e2e8f0">
+        <button class="btn bs" onclick="document.getElementById('userResetPwdOvl').remove()">Cancel</button>
+        <button class="btn bp" onclick="_userResetPwdExecute('${safeId}')">🔑 Reset to Temporary Password</button>
+      </div>
+    </div>
+  </div>`;
+  document.body.insertAdjacentHTML('beforeend', html);
+  setTimeout(function(){ document.getElementById('urp_pwd')?.focus(); }, 50);
+}
+window._userOpenResetPwdModal = _userOpenResetPwdModal;
+
+async function _userResetPwdExecute(userId){
+  const errEl = document.getElementById('urp_err');
+  if(errEl) errEl.style.display='none';
+  const u = getUsers().find(x=>String(x.id)===String(userId));
+  if(!u){ if(errEl){ errEl.textContent='User not found'; errEl.style.display='block'; } return; }
+  const pwd = (document.getElementById('urp_pwd')?.value || '');
+  const confirm = (document.getElementById('urp_confirm')?.value || '');
+  if(pwd.length < 6){
+    if(errEl){ errEl.textContent='Password must be at least 6 characters'; errEl.style.display='block'; }
+    return;
+  }
+  if(pwd !== confirm){
+    if(errEl){ errEl.textContent='Passwords do not match'; errEl.style.display='block'; }
+    return;
+  }
+  // [Phase HR1c.5.4f] L6 · Store with `temp:` prefix · login sets `_PWD_MUST_CHANGE` sentinel after verify.
+  const hashed = await hashTempPassword(pwd);
   try {
     await sbAPI('PATCH','users',{password:hashed},'id=eq.'+encodeURIComponent(String(u.id)));
+    // Update localStorage cache so subsequent local logins also see the temp password.
+    const localUsers = JSON.parse(ls('hmc_users_remote') || '[]');
+    const idx = localUsers.findIndex(function(x){ return x && String(x.id) === String(u.id); });
+    if(idx >= 0){ localUsers[idx].password = hashed; sl('hmc_users_remote', JSON.stringify(localUsers)); }
     await _refreshUsersCache();
-    toast(`🔑 Password reset for ${u.username}`,'ok');
-  } catch(e){ toast('❌ Reset failed: '+(e.message||''),'err'); }
+    // [Phase HR1c.5.4f] L8 · Audit · admin reset event.
+    if(typeof logAccess==='function') logAccess('auth.password.reset.admin', String(u.id), u.username||'');
+    document.getElementById('userResetPwdOvl')?.remove();
+    toast('🔑 Temporary password set for '+u.username+' · they must change on next login','ok');
+  } catch(e){
+    if(errEl){ errEl.textContent='Reset failed: '+(e.message||''); errEl.style.display='block'; }
+  }
 }
+window._userResetPwdExecute = _userResetPwdExecute;
 
 async function userToggleActive(id){
   if(String(id)===String(CU.id)){ toast('Cannot disable yourself','err'); return; }
