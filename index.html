@@ -7674,6 +7674,90 @@ window._doctorPlannerRender        = _doctorPlannerRender;
 window._doctorPlannerFilterChange  = _doctorPlannerFilterChange;
 
 // ═══════════════════════════════════════════════════════════════════════════
+// [Phase HR1c.6b] DP1 · Printable Doctor Planner · mirrors HR1c.5.5.3 _plannerPrint pattern.
+// ═══════════════════════════════════════════════════════════════════════════
+//   - Reuses _doctorPlannerBuildHTML(monthYM) BYTE-IDENTICAL (no flag · no signature change).
+//   - Same CSS as Nurse Planner Print · .planner-action-col hides Plan column in print output.
+//   - Permission gate: hr.shifts.schedule (admin/hr_manager · Q1=A · matches Plan Doctor HR1c.6d gate).
+//   - Title H1: "HMC — Doctor Planner / Monthly Duty Roster — {Month}".
+//   - Meta line: "Scope · N doctors · M shifts · Prepared by {name} · Printed {timestamp}".
+//   - Shift count (Q5): shift_schedules rows in month with doctorStaffId OR doctorUserId · not cancelled.
+//   - Auto-print delay (Q4): 400ms · matches Nurse Planner.
+//   - <\/script> escape per Rule #11 (parent script preservation).
+function _doctorPlannerPrint(){
+  const monthEl = document.getElementById('rostMonth');
+  const today = new Date();
+  const defaultMonth = today.getFullYear()+'-'+String(today.getMonth()+1).padStart(2,'0');
+  const monthYM = (monthEl && monthEl.value) ? monthEl.value : defaultMonth;
+  // [Phase HR1c.6b] Q1=A · admin/hr_manager only · matches Plan Doctor gate · head_nurse blocked.
+  const hasAll = (typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'));
+  if(!hasAll){
+    if(typeof toast==='function') toast('Permission denied · admin/hr_manager only','err');
+    return;
+  }
+  const scopeLabel = 'All Clinics';
+  let monthLbl = monthYM;
+  try { monthLbl = new Date(monthYM+'-01T00:00:00').toLocaleDateString('en-GB',{month:'long',year:'numeric'}); } catch(e){}
+  const preparedBy = (typeof CU!=='undefined' && CU && CU.name) ? CU.name : '';
+  const printedAt = new Date().toLocaleString('en-GB',{day:'2-digit',month:'short',year:'numeric',hour:'2-digit',minute:'2-digit'});
+  // Doctor count from staff rows (HR1c.6a-cleaned via getActiveDoctors).
+  const staffRows = (typeof _doctorPlannerStaffRows==='function') ? _doctorPlannerStaffRows(monthYM) : [];
+  const doctorCount = staffRows.length;
+  // [Phase HR1c.6b] Q5 · Shift count semantics · shift_schedules in month with a doctor assigned (not cancelled).
+  //   Matches what _doctorPlannerBuildHTML actually renders in cells (single-doctor-per-shift contract).
+  const allShiftsCur = (typeof getShiftSchedules==='function') ? getShiftSchedules() : [];
+  const shiftCount = allShiftsCur.filter(function(s){
+    if(!s || !s.date || s.status==='cancelled') return false;
+    if(!s.date.startsWith(monthYM)) return false;
+    return !!(s.doctorStaffId || s.doctorUserId);
+  }).length;
+  const tableHTML = (typeof _doctorPlannerBuildHTML==='function') ? _doctorPlannerBuildHTML(monthYM) : '<div>Planner unavailable</div>';
+  // [Phase HR1c.6b] Reuse the SAME CSS as Nurse Planner Print · all .planner classes shared.
+  const css = '<style>'+
+    '@page { size: A4 landscape; margin: 8mm; }'+
+    '@media print and (min-width:300mm){ @page { size: A3 landscape; margin: 10mm; } }'+
+    'body { font-family: Arial, sans-serif; margin:0; padding:0; -webkit-print-color-adjust: exact; print-color-adjust: exact; }'+
+    '.planner { width:100%; border-collapse:collapse; table-layout:fixed; font-size: 9pt; }'+
+    '.planner th, .planner td { border: 1px solid #444; padding: 3px 4px; text-align:center; }'+
+    '.planner-staff-col { text-align:left; min-width:130px; font-weight:600; }'+
+    '.planner-day-col .planner-dom { font-weight:700; }'+
+    '.planner-day-col .planner-dow { font-size:7pt; color:#555; }'+
+    '.planner-status-planned   { background:#fef3c7; }'+
+    '.planner-status-published { background:#d4f1d4; }'+
+    '.planner-status-cancelled { background:#fee2e2; color:#b91c1c; text-decoration:line-through; }'+
+    '.planner-off              { color:#94a3b8; }'+
+    '.planner-multi            { padding:0; }'+
+    '.planner-stack            { padding:2px 4px; border-bottom:1px dashed #ccc; }'+
+    '.planner-stack:last-child { border-bottom:none; }'+
+    '.planner-cell-branch      { font-weight:600; }'+
+    '.planner-cell-time        { font-size:8pt; color:#444; }'+
+    /* [Phase HR1c.6b] Hide Plan column + screen toolbars in print · CSS-only · _doctorPlannerBuildHTML byte-identical. */
+    '.planner-action-col       { display:none !important; }'+
+    '.noprint, .print-toolbar  { display:none !important; }'+
+    '@media print { .noprint, .print-toolbar { display:none !important; } .planner tr { page-break-inside: avoid; } .planner thead { display: table-header-group; } }'+
+    'h1 { font-size:14pt; margin:8px 0 2px 0; }'+
+    '.planner-meta { font-size:10pt; color:#444; margin-bottom:8px; }'+
+    '</style>';
+  const w = window.open('','_blank','width=1100,height=800');
+  if(!w){ if(typeof toast==='function') toast('Pop-up blocked · allow pop-ups to print','err'); return; }
+  const toolbar = (typeof PRINT_TOOLBAR_HTML!=='undefined') ? PRINT_TOOLBAR_HTML : '';
+  const titleSafe = 'HMC Doctor Planner · '+monthLbl;
+  w.document.open();
+  w.document.write('<!DOCTYPE html><html><head><meta charset="utf-8"><title>'+titleSafe+'</title>'+css+'</head><body>'+
+    toolbar+
+    '<div style="padding:10mm">'+
+      '<h1>HMC — Doctor Planner / Monthly Duty Roster — '+monthLbl+'</h1>'+
+      '<div class="planner-meta">Scope: '+scopeLabel+' · '+doctorCount+' doctor'+(doctorCount===1?'':'s')+' · '+shiftCount+' shift'+(shiftCount===1?'':'s')+' · Prepared by '+preparedBy+' · Printed '+printedAt+'</div>'+
+      tableHTML+
+    '</div>'+
+    '<script>setTimeout(function(){ try{ window.print(); }catch(e){} }, 400);<\/script>'+
+    '</body></html>');
+  w.document.close();
+  if(typeof logAccess==='function') logAccess('hr.doctor.planner.print', '', monthYM);
+}
+window._doctorPlannerPrint = _doctorPlannerPrint;
+
+// ═══════════════════════════════════════════════════════════════════════════
 // [Phase HR1c.6d] Plan Doctor · doctor-only planning workflow (analogous to
 // nurse Plan Month but writes to shift_schedules.doctor_user_id/doctor_staff_id
 // and shift_assignments role='doctor'). NO nurse checkboxes · NO Create Shift
@@ -8914,9 +8998,10 @@ function renderSchedulesPage(){
         <span style="font-size:11px;color:var(--g600);align-self:center"><strong>All Clinics</strong> · nurse-centric planner</span>
         ${(typeof hasPerm==='function' && (hasPerm('hr.shifts.schedule')||hasPerm('hr.shifts.schedule.ownBranch')))?`<button class="btn bs btn-sm" onclick="openAddNurseToPlannerModal()">👥 + Add Nurse to Planner</button><button class="btn bs btn-sm" onclick="_plannerPrint()">🖨 Print</button>`:''}
       </div>
-      <!-- [Phase HR1c.6] Doctor Planner toolbar · placeholder · empty in HR1c.6 (write/print deferred to HR1c.6.b/.c) -->
+      <!-- [Phase HR1c.6] Doctor Planner toolbar · [Phase HR1c.6d] Plan column added · [Phase HR1c.6b] Print button added (L5: removed "read-only" tagline since Plan Doctor write paths now exist). -->
       <div id="schedDoctorPlannerToolbar" style="display:none;gap:6px;flex-wrap:wrap;align-items:flex-end">
-        <span style="font-size:11px;color:var(--g600);align-self:center"><strong>All Clinics</strong> · doctor coverage planner · read-only</span>
+        <span style="font-size:11px;color:var(--g600);align-self:center"><strong>All Clinics</strong> · doctor coverage planner</span>
+        ${(typeof hasPerm==='function' && hasPerm('hr.shifts.schedule'))?`<button class="btn bs btn-sm" onclick="_doctorPlannerPrint()">🖨 Print</button>`:''}
       </div>
       <div style="flex:1;min-width:200px" id="schedStats"></div>
     </div>
