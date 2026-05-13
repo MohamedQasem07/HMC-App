@@ -10551,7 +10551,11 @@ function renderClinicDash(){
       '<div class="sb-btns">'+
         (showClockIn ? clockInBtnHTML : '')+
         '<button class="sbtn sbtn-tr" onclick="openDoctorPicker()">'+docLabel+' ✎</button>'+
-        (checkedOut?'':'<button class="sbtn sbtn-end" onclick="endMyDay()">⏹ End My Day</button>')+
+        /* [Phase HR1d.1a-ui-fix] U3 · End My Day only valid AFTER explicit Clock In (hasExplicit).
+           Pre-Clock-In · Show only Clock In Now (line above) · prevents "end of a day not started" UX.
+           Q3 decision · button REMAINS visible during pending approval (hasExplicit=true) so a nurse
+           who clocked in by mistake can still back out before admin acts. */
+        ((checkedOut || !hasExplicit)?'':'<button class="sbtn sbtn-end" onclick="endMyDay()">⏹ End My Day</button>')+
       '</div>'+
       '</div>';
   })()}
@@ -14191,8 +14195,17 @@ function renderShifts(){
   const monthLabel = new Date(selMonth+'-01').toLocaleDateString('en-GB',{month:'long',year:'numeric'});
 
   // Live: active workdays (today, not checked out)
-  const liveToday = wds.filter(function(w){ return w.date===today && !w.checkedOutAt; })
-    .sort(function(a,b){ return a.firstLogin.localeCompare(b.firstLogin); });
+  // [Phase HR1d.1a-ui-fix] U1 · Live Today must mirror gate state · only show nurses who
+  //   actually clocked in (clockInExplicitAt set) AND not checked-out AND not pending/rejected.
+  //   Without this, auto-created workday rows from showApp()→ensureTodayWorkday() wrongly
+  //   appear as "live" while the gate (requireActiveShift) correctly returns BLOCKED_NEEDS_START.
+  //   Cascades: "Since" column · End My Day button · admin dashboard liveToday.length stat.
+  const liveToday = wds.filter(function(w){
+    if(!w || w.date!==today || w.checkedOutAt) return false;
+    if(!w.clockInExplicitAt) return false;
+    if(w.clockInApprovalStatus==='pending' || w.clockInApprovalStatus==='rejected') return false;
+    return true;
+  }).sort(function(a,b){ return (a.clockInExplicitAt||a.firstLogin||'').localeCompare(b.clockInExplicitAt||b.firstLogin||''); });
 
   // This user's workdays this month
   const myMonth = wds.filter(function(w){
@@ -14313,7 +14326,9 @@ function renderShifts(){
         '<td><span class="bdg bb" style="font-size:10px">'+(getBr(w.branch).name||'—')+'</span></td>'+
         '<td style="font-size:12px">'+(w.doctorName?'👨‍⚕️ '+w.doctorName:'<em style="color:#94a3b8">not set</em>')+
           (mine?' <button class="btn bs btn-sm" onclick="openDoctorPicker()" style="margin-left:4px;padding:2px 8px;font-size:10px">✎</button>':'')+'</td>'+
-        '<td style="font-size:12px">'+fmtTime(w.firstLogin)+'</td>'+
+        /* [Phase HR1d.1a-ui-fix] U2 · Live Today "Since" reflects actual Clock In (clockInExplicitAt) ·
+           defensive fallback to firstLogin · post-U1 filter guarantees clockInExplicitAt is present here. */
+        '<td style="font-size:12px">'+fmtTime(w.clockInExplicitAt || w.firstLogin)+'</td>'+
         '<td style="font-weight:600;color:'+(h.overtime>0?'var(--am)':'var(--gr)')+'">'+fmtHours(h.hours)+(h.overtime>0?' <span style="font-size:10px;color:var(--am)">(+'+fmtHours(h.overtime)+' OT)</span>':'')+'</td>'+
         '<td><span class="bdg bb" style="font-size:10px">'+(w.caseCount||0)+'</span></td>'+
         (isNurse && mine ? '<td><button class="btn brd btn-sm" onclick="endMyDay()">⏹ End My Day</button></td>' : (isNurse?'<td></td>':''))+
