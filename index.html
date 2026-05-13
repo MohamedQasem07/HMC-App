@@ -14294,6 +14294,17 @@ function renderShifts(){
     return acc;
   }, {hours:0, overtime:0, cases:0});
 
+  // [Phase HR1d.1a-ui-fix-2] U1 · Clock In Now CTA state · gate is the single source of truth.
+  //   BLOCKED_NEEDS_START is the exact state where the nurse has a shift today but hasn't tapped
+  //   Clock In Now yet. Without this CTA, blocked nurses (routed to 'shifts' by HR1d.1a M3) had
+  //   no reachable button — the Clock In Now button in renderClinicDash was unreachable because
+  //   the gate blocks nav('dashboard') for that state.
+  const _shiftGateState = (isNurse && typeof requireActiveShift==='function')
+    ? requireActiveShift() : { ok: true, state: 'NOT_GATED' };
+  const _needsClockInCta = isNurse && _shiftGateState && _shiftGateState.state === 'BLOCKED_NEEDS_START';
+  // [Phase HR1d.1a-ui-fix-2] U1b · Pending-approval inline notice · clarifies "you clocked in · waiting on admin".
+  const _pendingApprovalNotice = isNurse && _shiftGateState && _shiftGateState.state === 'BLOCKED_PENDING';
+
   return `
   <!-- Header: month picker -->
   <div class="card" style="margin-bottom:14px;padding:14px">
@@ -14309,6 +14320,27 @@ function renderShifts(){
       </div>
     </div>
   </div>
+
+  <!-- [Phase HR1d.1a-ui-fix-2] U1 · Clock In Now CTA · only renders when gate=BLOCKED_NEEDS_START.
+       Resolves the pilot blocker where blocked nurses couldn't reach the dashboard banner button.
+       Same clockInNow() call as the dashboard banner · same auto-approve / pending semantics. -->
+  ${_needsClockInCta ? `
+  <div id="hr1d1a_clockin_cta_card" class="card" style="margin-bottom:14px;padding:18px;background:linear-gradient(135deg,#b45309,#d97706);color:#fff;border-radius:8px;box-shadow:0 4px 12px rgba(180,83,9,0.25)">
+    <div style="display:flex;justify-content:space-between;align-items:center;flex-wrap:wrap;gap:14px">
+      <div style="flex:1;min-width:240px">
+        <div style="font-size:16px;font-weight:700">🚧 Start Shift Required — تسجيل الدخول للوردية</div>
+        <div style="font-size:12px;opacity:0.95;margin-top:6px;line-height:1.4">Tap <strong>Clock In Now</strong> to begin your shift. Your location is captured once for verification — not tracked continuously.</div>
+      </div>
+      <button class="btn" onclick="clockInNow()" style="background:#fff;color:#b45309;border:none;border-radius:8px;padding:14px 26px;font-size:15px;font-weight:700;cursor:pointer;box-shadow:0 2px 8px rgba(0,0,0,0.15);white-space:nowrap;min-width:180px">📍 Clock In Now</button>
+    </div>
+  </div>` : ''}
+
+  <!-- [Phase HR1d.1a-ui-fix-2] U1b · Pending approval notice · explicit feedback while admin reviews. -->
+  ${_pendingApprovalNotice ? `
+  <div id="hr1d1a_pending_notice_card" class="card" style="margin-bottom:14px;padding:14px;background:#fef3c7;border:1px solid #d97706;color:#7c2d12;border-radius:8px">
+    <div style="font-size:14px;font-weight:700">🟡 Pending Admin Approval</div>
+    <div style="font-size:12px;margin-top:4px;line-height:1.4">You clocked in successfully. An administrator must approve your clock-in before you can access operational pages. Please contact your admin if this is urgent.</div>
+  </div>` : ''}
 
   <!-- LIVE: Who's working now -->
   <div class="card" style="margin-bottom:14px;padding:0">
@@ -14385,7 +14417,11 @@ function renderShifts(){
       return '<tr><td style="font-size:12px">'+new Date(w.date).toLocaleDateString('en-GB',{weekday:'short',day:'2-digit',month:'short'})+'</td>'+
         '<td><span class="bdg bb" style="font-size:10px">'+(getBr(w.branch).name||'—')+'</span></td>'+
         '<td style="font-size:12px">'+(w.doctorName||'—')+'</td>'+
-        '<td style="font-size:12px">'+fmtTime(w.firstLogin)+'</td>'+
+        /* [Phase HR1d.1a-ui-fix-2] U2 · My Month "Clock In" column uses clockInExplicitAt
+           (the actual explicit Clock In event) · defensive fallback to firstLogin for legacy
+           rows. Matches the HR1d.1a-ui-fix U2 fix applied to Live Today "Since" column.
+           Note: workdayHours() still uses firstLogin (Q1=A · payroll deferred to HR1d.1b). */
+        '<td style="font-size:12px">'+fmtTime(w.clockInExplicitAt || w.firstLogin)+'</td>'+
         '<td style="font-size:12px">'+outTxt+'</td>'+
         '<td style="font-weight:600">'+fmtHours(h.hours)+'</td>'+
         '<td style="color:'+(h.overtime>0?'var(--am)':'var(--g400)')+';font-weight:'+(h.overtime>0?'600':'400')+'">'+(h.overtime>0?'+'+fmtHours(h.overtime):'—')+'</td>'+
