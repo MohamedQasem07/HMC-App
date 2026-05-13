@@ -5540,9 +5540,15 @@ async function doLogin(){
 }
 function ql(u,p){document.getElementById('lu').value=u;document.getElementById('lp').value=p;doLogin();}
 function doLogout(){
-  // [Session #5 WORKDAY] Mark checkoutAt on logout so hours are captured accurately
-  // even if the nurse just closes the laptop. The workday stays intact for tomorrow's reports.
-  try { if(isWorkdayTrackedUser()) checkoutTodayWorkday(); } catch(e){}
+  // [Phase HR1d.1a-logout-fix] CRITICAL · do NOT auto-checkout the workday on logout.
+  //   Prior Session #5 WORKDAY behavior called checkoutTodayWorkday() here · that set
+  //   wd.checkedOutAt = nowISO · which under HR1d.1a Q3 ("NO auto-reopen of checked-out
+  //   workday") permanently locks the nurse out for the rest of the day · pilot blocker.
+  //   The workday now ends ONLY when:
+  //     (1) the nurse explicitly clicks "⏹ End My Day" (banner button or Live Today row), or
+  //     (2) admin/ops takes corrective action (future emergency-reopen flow · TBD).
+  //   Logout is purely a session-clear action · it must not end the workday.
+  //   Audit log + sessionStorage cleanup preserved unchanged.
   // [Session #6] Audit log for logout
   try { if(typeof logAccess==='function') logAccess('logout', CU?.id||'', ''); } catch(e){}
   // [Phase HR1d.1d] Clear doctor scope pick on logout · prevents stale picks bleeding across sessions.
