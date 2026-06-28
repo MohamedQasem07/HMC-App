@@ -25441,7 +25441,24 @@ window.addEventListener('DOMContentLoaded',()=>{
   const sbEl=document.getElementById('sbLogo');
   if(sbEl&&llImg) sbEl.src=llImg.src; else if(sbEl) sbEl.src=HMC_LOGO_B64;
     const sess=localStorage.getItem('hmc_session');
-  if(sess){try{CU=JSON.parse(sess);showApp();}catch(e){}}
+  // [RESTORE V1 · S1-fix] A restored legacy session is only valid on V2 if a live
+  //   hmc-v2 Supabase Auth JWT also exists. A STALE old-app session (e.g. cached
+  //   "Mohamed Ramadan" from the pre-V2 build · no JWT) would otherwise "log in"
+  //   with no token → every sync request 401s → the red "Sync to Supabase failed"
+  //   banner. Require a (refreshable) V2 token; otherwise drop the stale session
+  //   and show a clean Supabase Auth login.
+  if(sess){
+    (async function(){
+      let _v2tok=null;
+      try{ _v2tok = (window.HMCV2_AUTH && typeof window.HMCV2_AUTH.getToken==='function') ? await window.HMCV2_AUTH.getToken() : null; }catch(e){ _v2tok=null; }
+      if(_v2tok){ try{ CU=JSON.parse(sess); showApp(); }catch(e){} }
+      else {
+        try{ localStorage.removeItem('hmc_session'); }catch(e){}
+        CU=null;
+        try{ if(typeof toast==='function') setTimeout(function(){ toast('🔐 الجلسة انتهت — سجّل الدخول من جديد · Session expired, please sign in again','warn'); }, 500); }catch(e){}
+      }
+    })();
+  }
   document.getElementById('lu').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
   document.getElementById('lp').addEventListener('keydown',e=>{if(e.key==='Enter')doLogin();});
   document.querySelectorAll('.mbd').forEach(m=>m.addEventListener('click',e=>{
