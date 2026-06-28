@@ -13,7 +13,7 @@
 //
 // Built from the radiology-app pattern (same flow, proven on production).
 
-const CACHE_VERSION = 'v3'; /* RESTORE V1 2026-06-28: stale-session boot guard */
+const CACHE_VERSION = 'v4'; /* RESTORE V1 2026-06-28: idle auto-logout */
 const CACHE_NAME = `hmc-app-${CACHE_VERSION}`;
 
 const STATIC_ASSETS = [

@@ -26281,6 +26281,37 @@ window.showSkeletonCards = showSkeletonCards;
   window._filterCasesSkelPatched = true;
 })();
 
+// [RESTORE V1 · SEC] Idle auto-logout for shared clinic devices. 30-min inactivity →
+//   sign out, BUT never while a Case/Report modal (or any overlay) is open — protects
+//   in-progress data entry from loss. Frontend-only · additive · resets on any activity.
+(function HMC_IDLE_LOGOUT(){
+  "use strict";
+  var IDLE_MS = 30*60*1000, WARN_MS = 28*60*1000;
+  var last = Date.now(), warned = false;
+  function bump(){ last = Date.now(); warned = false; }
+  ['mousemove','mousedown','keydown','touchstart','scroll','click'].forEach(function(ev){
+    document.addEventListener(ev, bump, {passive:true, capture:true});
+  });
+  function busy(){
+    var cm=document.getElementById('caseModal'), rm=document.getElementById('rptModal');
+    if(cm && cm.classList.contains('open')) return true;
+    if(rm && rm.classList.contains('open')) return true;
+    return !!document.querySelector('.modal.open, [id$="Ovl"]'); // any open overlay/dialog
+  }
+  setInterval(function(){
+    if(typeof CU==='undefined' || !CU){ last = Date.now(); return; } // only while signed in
+    var idle = Date.now() - last;
+    if(idle >= IDLE_MS){
+      if(busy()){ last = Date.now(); return; } // postpone — don't drop data mid-entry
+      try{ if(typeof toast==='function') toast('🔒 تسجيل خروج تلقائي بسبب عدم النشاط · Signed out after inactivity','warn'); }catch(e){}
+      try{ if(typeof doLogout==='function') doLogout(); }catch(e){}
+    } else if(idle >= WARN_MS && !warned){
+      warned = true;
+      try{ if(typeof toast==='function') toast('⏳ هتخرج تلقائيًا قريبًا لعدم النشاط · You will be signed out soon (inactivity)','warn'); }catch(e){}
+    }
+  }, 30*1000);
+})();
+
 </script>
 
 <!-- [RESTORE V1 · P1 2026-06-28] Claude Design colour overlay REMOVED per owner —
