@@ -13,7 +13,7 @@
 //
 // Built from the radiology-app pattern (same flow, proven on production).
 
-const CACHE_VERSION = 'v1';
+const CACHE_VERSION = 'v2'; /* RESTORE V1 2026-06-28: hmc-v2 rewire + UI polish */
 const CACHE_NAME = `hmc-app-${CACHE_VERSION}`;
 
 const STATIC_ASSETS = [
