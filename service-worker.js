@@ -13,7 +13,7 @@
 //
 // Built from the radiology-app pattern (same flow, proven on production).
 
-const CACHE_VERSION = 'v4'; /* RESTORE V1 2026-06-28: idle auto-logout */
+const CACHE_VERSION = 'v5'; /* RESTORE V1: M3 P&L + M2 dedup + M4 transfers */
 const CACHE_NAME = `hmc-app-${CACHE_VERSION}`;
 
 const STATIC_ASSETS = [

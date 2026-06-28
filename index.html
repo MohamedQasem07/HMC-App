@@ -10559,6 +10559,22 @@ function renderAdminDash(){
   </div>`;
 }
 
+// [RESTORE V1 · M4] One-click "Receive" for an incoming transfer at the center:
+//   sets treatedAt = this center (case moves from "incoming" to "at center"), stamps
+//   who/when received, saves + pushes + audits. Room/doctor get assigned in the case modal.
+async function receiveTransfer(caseId, branchId){
+  const cs = getCases(); const idx = cs.findIndex(function(c){return c.id===caseId;});
+  if(idx<0){ if(typeof toast==='function') toast('Case not found','err'); return; }
+  cs[idx].treatedAt = branchId;
+  cs[idx].centerRoomAssignedAt = new Date().toISOString();
+  cs[idx].centerRoomAssignedBy = (typeof CU!=='undefined'&&CU&&CU.name)||'';
+  saveCases(cs);
+  if(typeof pushCase==='function') pushCase(cs[idx]).catch(function(){});
+  if(typeof logAccess==='function') logAccess('case.transfer.received', caseId, branchId);
+  if(typeof toast==='function') toast('✅ تم استلام الحالة في المركز · Transfer received — افتحها لتخصيص الغرفة/الطبيب','ok');
+  if(typeof nav==='function') nav(PAGE||'dashboard');
+}
+window.receiveTransfer = receiveTransfer;
 function renderCenterDash(branchId){
   const b=getBr(branchId);
   const cases=getCases().filter(c=>c.branch===branchId||c.treatedAt===branchId||c.transferTo===branchId);
@@ -10593,7 +10609,7 @@ function renderCenterDash(branchId){
         <td><span class="bdg ba">${getBr(c.branch).name||c.branch}</span></td>
         <td style="font-size:12px">${c.diagnosis||'—'}</td>
         <td style="font-size:11px;color:var(--g600);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap">${c.transferSummary||c.transferNotes||'—'}</td>
-        <td><button class="btn bp btn-sm" onclick="openCaseModal('${c.id}')">📋 Process</button></td>
+        <td><div style="display:flex;gap:4px;justify-content:flex-end"><button class="btn bgn btn-sm" onclick="receiveTransfer('${c.id}','${branchId}')" title="استلام في المركز">✅ استلام</button><button class="btn bs btn-sm" onclick="openCaseModal('${c.id}')">📋 Process</button></div></td>
       </tr>`).join('')}
     </tbody></table></div>
   </div>`:''}
@@ -11729,8 +11745,8 @@ function renderCaseTab1(c,prefill,isClinic,isAdmin,activeShift){
   h+='<div class="fsg"><label class="fsl">Departure Date</label><input class="fsi" type="date" id="f_dep" value="'+(c?.departureDate||'')+'" onchange="if(this.value&&document.getElementById(\'f_arr\').value&&this.value<document.getElementById(\'f_arr\').value){alert(\'Departure cannot be before arrival\');this.value=\'\'}"></div>';
   h+='</div></div>';
   h+='<div style="display:grid;grid-template-columns:1fr 1fr;gap:10px;margin-bottom:10px">';
-  h+='<div class="fsg"><label class="fsl">First Name *</label><input class="fsi" id="f_fn" value="'+firstName+'" placeholder="First name" style="border-color:'+(firstName?'var(--gr)':'var(--g200)')+'"></div>';
-  h+='<div class="fsg"><label class="fsl">Last Name *</label><input class="fsi" id="f_ln" value="'+lastName+'" placeholder="Last name" style="border-color:'+(lastName?'var(--gr)':'var(--g200)')+'"></div>';
+  h+='<div class="fsg"><label class="fsl">First Name *</label><input class="fsi" id="f_fn" value="'+firstName+'" placeholder="First name" oninput="if(typeof checkExistingPatient===\'function\')checkExistingPatient()" style="border-color:'+(firstName?'var(--gr)':'var(--g200)')+'"></div>';
+  h+='<div class="fsg"><label class="fsl">Last Name *</label><input class="fsi" id="f_ln" value="'+lastName+'" placeholder="Last name" oninput="if(typeof checkExistingPatient===\'function\')checkExistingPatient()" style="border-color:'+(lastName?'var(--gr)':'var(--g200)')+'"></div>';
   h+='</div>';
   h+='<div style="display:grid;grid-template-columns:1fr 1fr 1fr;gap:10px;margin-bottom:10px">';
   // [Session #6 Wave1 #3] DOB year now uses datalist (typeahead): user types "85"
@@ -11786,7 +11802,12 @@ function renderCaseTab1(c,prefill,isClinic,isAdmin,activeShift){
     +'</div>';
   h+='<div class="fsg"><label class="fsl">Post Code</label><input class="fsi" id="f_pc" value="'+(c?.postCode||'')+'" placeholder="e.g. SW1A 1AA"></div>';
   h+='</div>';
-  h+='<div id="existingPatientAlert" style="display:none;background:var(--aml);border:1px solid var(--am);border-radius:var(--ra);padding:8px 12px;margin-top:8px;font-size:12px;color:#92400e"></div>';
+  // [RESTORE V1 · M2] Duplicate-patient detection — activates the existing checkExistingPatient()/fillFromExisting() logic.
+  h+='<div id="existingPatientAlert" style="display:none;background:var(--aml);border:1px solid var(--am);border-radius:var(--ra);padding:10px 12px;margin-top:8px;font-size:12px;color:#92400e">'
+    +'<div style="display:flex;justify-content:space-between;align-items:center;gap:8px;flex-wrap:wrap">'
+    +'<div><strong>⚠️ مريض موجود قبل كده · Patient may already exist</strong><div id="existingPatientInfo" style="margin-top:3px;font-weight:400"></div></div>'
+    +'<button type="button" class="btn bs btn-sm" onclick="fillFromExisting()" style="white-space:nowrap">↪️ استخدم بياناته · Use details</button>'
+    +'</div></div>';
   // [Session #7 R2-#5] Attachments moved to the last tab (Discharge) — they
   // logically belong there (after the case is processed). The hidden inputs
   // below stay so other parts of the form can still reference them.
@@ -13920,6 +13941,29 @@ function renderFin(){
       ${['Cash','Visa','Bank Transfer','Insurance','Instapay'].map(m=>{const cnt=cs.filter(c=>(c.payments||[]).some(p=>p.method===m)||c.paymentMethod===m).length;return`<div style="text-align:center;padding:14px;background:var(--g50);border-radius:var(--ra)"><div style="font-size:22px;margin-bottom:5px">${{Cash:'💵',Visa:'💳','Bank Transfer':'🏦',Insurance:'🛡️',Instapay:'📱'}[m]||'💰'}</div><div style="font-size:19px;font-weight:600">${cnt}</div><div style="font-size:11px;color:var(--g500)">${m}</div></div>`;}).join('')}
     </div>
   </div>
+  ${/* [RESTORE V1 · M3] Per-Branch P&L — Net = Collected − Cost-to-Owner − Expenses (salaries deferred to M5) */(function(){
+    var branches = (typeof BRANCHES!=='undefined'?BRANCHES:[]);
+    var exp = (typeof getExpenses==='function'?getExpenses():[]);
+    var rows = branches.map(function(b){
+      var bc = cs.filter(function(c){return c.branch===b.id;});
+      var invoiced = bc.reduce(function(s,c){return s+(parseFloat(c.invoiceAmount)||0);},0);
+      var collected = bc.reduce(function(s,c){return s+(parseFloat(c.collected)||0);},0);
+      var cost = bc.reduce(function(s,c){return s+(parseFloat(c.costToOwner)||0);},0);
+      var bexp = exp.filter(function(e){return e.branch===b.id;}).reduce(function(s,e){return s+(parseFloat(e.amount)||0);},0);
+      return {name:b.name, n:bc.length, invoiced:invoiced, collected:collected, cost:cost, bexp:bexp, net:collected-cost-bexp};
+    }).filter(function(r){return r.n>0||r.cost>0||r.bexp>0;});
+    rows.sort(function(a,b){return b.net-a.net;});
+    if(!rows.length) return '';
+    var tot = rows.reduce(function(a,r){return {n:a.n+r.n,invoiced:a.invoiced+r.invoiced,collected:a.collected+r.collected,cost:a.cost+r.cost,bexp:a.bexp+r.bexp,net:a.net+r.net};},{n:0,invoiced:0,collected:0,cost:0,bexp:0,net:0});
+    var fmt=function(x){return Math.round(x).toLocaleString();};
+    var row=function(r,tr){return '<tr'+(tr?' style="background:var(--g50);font-weight:700"':'')+'><td>'+(tr?'الإجمالي · Total':'<strong>'+r.name+'</strong>')+'</td><td style="text-align:right">'+r.n+'</td><td style="text-align:right">'+fmt(r.invoiced)+'</td><td style="text-align:right;color:var(--gr)">'+fmt(r.collected)+'</td><td style="text-align:right">'+fmt(r.cost)+'</td><td style="text-align:right">'+fmt(r.bexp)+'</td><td style="text-align:right;font-weight:700;color:'+(r.net>=0?'var(--gr)':'var(--red)')+'">'+fmt(r.net)+'</td></tr>';};
+    return '<div class="card" style="margin-bottom:14px"><div class="ch"><div class="ct">💰 Per-Branch P&L — ربح/خسارة لكل فرع</div></div>'
+      +'<div class="tw"><table><thead><tr><th>الفرع · Branch</th><th style="text-align:right">Cases</th><th style="text-align:right">Invoiced</th><th style="text-align:right">Collected</th><th style="text-align:right">Cost</th><th style="text-align:right">Expenses</th><th style="text-align:right">Net</th></tr></thead><tbody>'
+      +rows.map(function(r){return row(r,false);}).join('')+row(tot,true)
+      +'</tbody></table></div>'
+      +'<div style="font-size:11px;color:var(--g500);margin-top:8px;padding:0 4px">ℹ️ Net = Collected − Cost-to-Owner − Expenses (المرتبات لسه مش متضمّنة · هتيجي مع M5 Payroll). أرقام مبدئية — العملات مختلطة (الفواتير غالبًا EUR · التكلفة/المصاريف EGP)؛ التوحيد بالـ FX في تحسين لاحق.</div>'
+      +'</div>';
+  })()}
   <div class="card" style="padding:0">
     <div style="padding:14px 16px 0"><div class="ct">Collection Tracker</div></div>
     <div class="tw"><table><thead><tr><th>Ref</th><th>Patient</th><th>Insurance</th><th>Invoice</th><th>GOP</th><th>Collected</th><th>Balance</th><th>Bank</th><th>Date</th><th>Status</th><th>Actions</th></tr></thead><tbody>
